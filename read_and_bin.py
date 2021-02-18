@@ -1,3 +1,7 @@
+### Grid average along-track radar freeboard observations from CryoSat-2 and Sentinel-3
+### Author: William Gregory
+### Last updated: 07/01/2021
+
 import numpy as np
 import os
 from mpl_toolkits.basemap import Basemap
