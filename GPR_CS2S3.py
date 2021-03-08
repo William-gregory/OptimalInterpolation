@@ -190,7 +190,6 @@ selected_variables = range(X.shape[0])
 if COMM.rank == 0:
     splitted_jobs = split(selected_variables, COMM.size)
     print('start:',datetime.datetime.now())
-    print('prior mean: ',str('%.3f'%mean))
 else:
     splitted_jobs = None
 
