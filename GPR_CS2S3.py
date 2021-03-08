@@ -52,7 +52,7 @@ def smooth(data,vmax,mask,std=1):
     data_smth = np.copy(data)
     data_smth[np.isinf(data_smth)] = np.nan
     data_smth[data_smth>vmax] = vmax
-    data_smth = convolve(data_smth,Gaussian2DKernel(x_stddev=std,y_stddev=std))
+    data_smth = convolve(data_smth,Gaussian2DKernel(std))
     data_smth[data_smth==0] = np.nanmean(data_smth)
     data_smth[np.isnan(mask)] = np.nan
     return data_smth
@@ -147,7 +147,6 @@ y = np.load(datapath+'/y_'+str(grid_res)+'km.npy')
 T=9
 T_mid=T//2
 radius = 300
-res = {}
 obs,sie_mask,dates = readFB(grid_res,'2018-2019')
 cs2_FYI = np.load(datapath+'/CS2_25km_FYI_20181101-20190428.npy')
 day=1 #December 1st 2018
@@ -190,7 +189,7 @@ selected_variables = range(X.shape[0])
 
 if COMM.rank == 0:
     splitted_jobs = split(selected_variables, COMM.size)
-    print(datetime.datetime.now())
+    print('start:',datetime.datetime.now())
     print('prior mean: ',str('%.3f'%mean))
 else:
     splitted_jobs = None
@@ -204,7 +203,7 @@ for index in scattered_jobs:
 results = COMM.gather(results, root=0)
         
 if COMM.rank == 0:
-    print(datetime.datetime.now())
+    res = {}
     fs = []
     sfs2 = []
     lZ = []
@@ -247,7 +246,10 @@ if COMM.rank == 0:
     res[date+'_ell_t_smth'] = smooth(res[date+'_ell_t'],9,SIE,std)
     res[date+'_sf2_smth'] = smooth(res[date+'_sf2'],0.1,SIE,std)
     res[date+'_sn2_smth'] = smooth(res[date+'_sn2'],0.05,SIE,std)
-
+else:
+    res = None
+    
+res = COMM.bcast(res,root=0)
 fs_smth = np.zeros(SIE.shape)*np.nan ; sfs2_smth = np.zeros(SIE.shape)*np.nan
 ellXs = np.array([res[date+'_ell_x_smth'][IDs],res[date+'_ell_y_smth'][IDs],res[date+'_ell_t_smth'][IDs]]).T
 sn2xs = res[date+'_sn2_smth'][IDs]
@@ -271,5 +273,5 @@ if COMM.rank == 0:
     sfs2_smth[IDs] = np.array(sfs2)
     res[date+'_interp_smth'] = fs_smth
     res[date+'_interp_error_smth'] = sfs2_smth
-    
-    save(res,datapath+'/FBinterp_'+date+'_'+str(grid_res)+'km_'+str(T)+'dayT_'+str(radius)+'kmiter_nonzeroMatern.pkl')
+    print('finish:',datetime.datetime.now())
+    save(res,datapath+'/CS2S3_'+date+'_'+str(grid_res)+'km.pkl')
