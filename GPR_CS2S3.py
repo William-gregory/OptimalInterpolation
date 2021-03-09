@@ -240,9 +240,9 @@ if COMM.rank == 0:
         std = 2
     else:
         std = 1
-    res[date+'_ell_x_smth'] = smooth(res[date+'_ell_x'],600e3,SIE,std)
-    res[date+'_ell_y_smth'] = smooth(res[date+'_ell_y'],600e3,SIE,std)
-    res[date+'_ell_t_smth'] = smooth(res[date+'_ell_t'],9,SIE,std)
+    res[date+'_ell_x_smth'] = smooth(res[date+'_ell_x'],2*radius*1000,SIE,std)
+    res[date+'_ell_y_smth'] = smooth(res[date+'_ell_y'],2*radius*1000,SIE,std)
+    res[date+'_ell_t_smth'] = smooth(res[date+'_ell_t'],T,SIE,std)
     res[date+'_sf2_smth'] = smooth(res[date+'_sf2'],0.1,SIE,std)
     res[date+'_sn2_smth'] = smooth(res[date+'_sn2'],0.05,SIE,std)
 else:
