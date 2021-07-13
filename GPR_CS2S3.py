@@ -16,9 +16,23 @@ from astropy.convolution import convolve, Gaussian2DKernel
 COMM = MPI.COMM_WORLD
 
 def split(container, count):
+    """
+    Function for dividing the number of tasks (container)
+    across the number of available compute nodes (count)
+    """
     return [container[_i::count] for _i in range(count)]
 
 def readFB(grid_res,season):
+    """
+    Read the input freeboard data and sea ice extent (sie) mask.
+    Returns:
+        obs: array containing gridded freeboard information from all satellites
+             of size (x,y,n,t), where n is the number of satellites (e.g., CS2 SAR,
+             CS2 SARIN, S3A and S3B), and t is the number of days of observations
+        sie_mask: array of daily sea ice extent of size (x,y,t), used to determine
+                  which grid cells to interpolate to on a given day
+        dates_trim: list dates (yyyymmdd) for which there are observations
+    """
     f = open(datapath+'/CS2_SAR_dailyFB_'+str(grid_res)+'km_'+season+'_season.pkl','rb')
     CS2_SAR = pickle.load(f)
     f = open(datapath+'/CS2_SARIN_dailyFB_'+str(grid_res)+'km_'+season+'_season.pkl','rb')
@@ -49,15 +63,32 @@ def readFB(grid_res,season):
     return obs,sie_mask,dates_trim
 
 def smooth(data,vmax,mask,std=1):
+    """
+    Function for applying a little bit of smoothing to the model 
+    hyperparameters, to smooth out erroneous features.
+    """
     data_smth = np.copy(data)
     data_smth[np.isinf(data_smth)] = np.nan
     data_smth[data_smth>vmax] = vmax
-    data_smth = convolve(data_smth,Gaussian2DKernel(std))
+    data_smth = convolve(data_smth,Gaussian2DKernel(x_stddev=std,y_stddev=std))
     data_smth[data_smth==0] = np.nanmean(data_smth)
     data_smth[np.isnan(mask)] = np.nan
     return data_smth
 
 def SGPkernel(x,xs=None,grad=False,ell=1,sigma=1):
+    """
+    Return a Matern (3/2) covariance function for the given inputs.
+    Inputs:
+            x: training data of size n x 3 (3 corresponds to x,y,time)
+            xs: training inputs of size ns x 3
+            grad: Boolean whether to return the gradients of the covariance
+                  function
+            ell: correlation length-scales of the covariance function
+            sigma: scaling pre-factor for covariance function
+    Returns:
+            sigma*k: scaled covariance function
+            sigma*dk: scaled matrix of gradients
+    """
     if xs is None:
         Q = squareform(pdist(np.sqrt(3.)*x/ell,'euclidean'))
         k = (1 + Q) * np.exp(-Q)
@@ -74,6 +105,18 @@ def SGPkernel(x,xs=None,grad=False,ell=1,sigma=1):
         return sigma*k
 
 def SMLII(hypers,x,y,mX):
+    """
+    Objective function to minimise when optimising the model
+    hyperparameters. This function is the negative log marginal likelihood.
+    Inputs:
+            hypers: initial guess of hyperparameters
+            x: inputs (vector of size n x 3)
+            y: outputs (freeboard values from all satellites, size n x 1)
+            mX: prior mean value
+    Returns:
+            nlZ: negative log marginal likelihood
+            dnLZ: gradients of the negative log marginal likelihood
+    """
     ell = [np.exp(hypers[0]),np.exp(hypers[1]),np.exp(hypers[2])]
     sf2 = np.exp(hypers[3])
     sn2 = np.exp(hypers[4])
@@ -98,6 +141,21 @@ def SMLII(hypers,x,y,mX):
     return nlZ,dnlZ
         
 def GPR3D(index,opt=True):
+    """
+    Gaussian Process Regression, the main interpolation function.
+    Inputs:
+            index: the index of the grid cell which will be interpolated
+            opt: Boolean whether to optimise the hyperparameters
+    Returns:
+            fs: interpolated freeboard at location given by index
+            sfs2: uncertainty in interpolated freeboard (1 standard deviation)
+            lZ: log marginal likelihood
+            lx: correlation length-scale hyperparameter in direction x
+            ly: correlation length-scale hyperparameter in direction y
+            lt: correlation length-scale hyperparameter in direction t
+            sf2: variance pre-factor hyperparameter
+            sn2: noise variance hyperparameter
+    """
     idr = X_tree.query_ball_point(x=X[index,:], r=radius*1000)
     ID = []
     for ix in range(len(X[idr])):
@@ -124,7 +182,7 @@ def GPR3D(index,opt=True):
         lZ = - np.dot((outputs-mX).T,A)/2 - np.log(L.diagonal()).sum() - n*np.log(2*np.pi)/2
         v = np.linalg.solve(L,Kxsx)
         fs = mean + np.dot(Kxsx.T,A)
-        sfs2 = (Kxs - np.dot(v.T,v)).diagonal() + sn2
+        sfs2 = np.sqrt((Kxs - np.dot(v.T,v)).diagonal())
         if opt:
             return fs[0],sfs2[0],lZ,lx,ly,lt,sf2,sn2
         else:
@@ -136,26 +194,30 @@ def GPR3D(index,opt=True):
             return np.nan,np.nan
 
 def save(dic,path):
+    """
+    Save dictionary containing interpolated freeboard, uncertainty
+    and model hyperparameters (pan-Arctic) to disk
+    """
     with open(path,'wb') as f:
         pickle.dump(dic,f,protocol=2)
     
 grid_res = 25
-datapath = os.path.expanduser('~')
+datapath = os.path.expanduser('~') #this is the directory where this file currently exists
 x = np.load(datapath+'/x_'+str(grid_res)+'km.npy')
 y = np.load(datapath+'/y_'+str(grid_res)+'km.npy')
 
-T=9
-T_mid=T//2
-radius = 300
+T=9 #number of days of data used to train the model
+T_mid=T//2 #mid point location corresponding to the day which will be interpolated
+radius = 300 #distance (in km) from each grid cell for which training data will be used for interpolation
 obs,sie_mask,dates = readFB(grid_res,'2018-2019')
 cs2_FYI = np.load(datapath+'/CS2_25km_FYI_20181101-20190428.npy')
-day=1 #December 1st 2018
-mean=np.nanmean(cs2_FYI[:,:,day+16:day+25]).round(3) #mean of previous 9 days of CS2 FYI as prior
-SIE = sie_mask[:,:,day+T_mid]
-sat = obs[:,:,:,day:day+T]
+day=1 #the day to interpolate will correspond to day+T_mid. Check which date this is with dates[day+T_mid]
+mean=np.nanmean(cs2_FYI[:,:,day+16:day+25]).round(3) #mean of previous 9 days of CS2 FYI as prior ##YOU WILL NEED TO CHANGE THE RANGE (day+16:day+25) DEPENDING ON THE INPUT DATA
+SIE = sie_mask[:,:,day+T_mid] #get the SIE for the day we wish to interpolate
+sat = obs[:,:,:,day:day+T] #get the input observations +/- 4 days around the day we wish to interpolate
     
-date = dates[day+T_mid]
-x0 = [np.log(grid_res*1000),np.log(grid_res*1000),np.log(1.),np.log(1.),np.log(1.),np.log(.1)]
+date = dates[day+T_mid] #the date which will be interpolated
+x0 = [np.log(grid_res*1000),np.log(grid_res*1000),np.log(1.),np.log(1.),np.log(1.),np.log(.1)] #initial hyperparameter values
 
 fs_grid = np.zeros(SIE.shape)*np.nan ; sfs2_grid = np.zeros(SIE.shape)*np.nan
 lx_grid = np.zeros(SIE.shape)*np.nan ; ly_grid = np.zeros(SIE.shape)*np.nan ; lt_grid = np.zeros(SIE.shape)*np.nan
@@ -181,27 +243,27 @@ y_train = np.concatenate((y1,y2,y3,y4))
 t_train = np.concatenate((t1,t2,t3,t4))
 z = np.concatenate((z1,z2,z3,z4))
     
-IDs = np.where(~np.isnan(SIE))
-X = np.array([x[IDs],y[IDs]]).T
+IDs = np.where(~np.isnan(SIE)) #grid cell locations which contain sea ice
+X = np.array([x[IDs],y[IDs]]).T #put x,y positions of sea ice locations in a long vector
 X_tree = scipy.spatial.cKDTree(X)
     
-selected_variables = range(X.shape[0])
+selected_variables = range(X.shape[0]) #the number of tasks to be done (i.e., the number of grid cells to be interpolated)
 
-if COMM.rank == 0:
-    splitted_jobs = split(selected_variables, COMM.size)
+if COMM.rank == 0: #if master node
+    splitted_jobs = split(selected_variables, COMM.size) #divide the number of grid cells across the number of available compute nodes
     print('start:',datetime.datetime.now())
 else:
     splitted_jobs = None
 
-scattered_jobs = COMM.scatter(splitted_jobs, root=0)
+scattered_jobs = COMM.scatter(splitted_jobs, root=0) #scatter the tasks to each of the computer nodes. E.g., if X.shape[0] = 5000 and we are using 10 nodes, then each node should receive 500 tasks
 
 results = []
-for index in scattered_jobs:
+for index in scattered_jobs: #each computer node will execute this loop and send its segement of data to be interpolated to the GPR3D function, 1 grid cell at a time
     outputs = GPR3D(index)
-    results.append(outputs)
-results = COMM.gather(results, root=0)
+    results.append(outputs) #store output interpolated values and hyperparameters in a list
+results = COMM.gather(results, root=0) #gather all of the results together from all of the computer nodes.
         
-if COMM.rank == 0:
+if COMM.rank == 0: #tell the master node to compile the results into their own respective arrays and map back to the 2D domain
     res = {}
     fs = []
     sfs2 = []
@@ -240,7 +302,7 @@ if COMM.rank == 0:
         std = 2
     else:
         std = 1
-    res[date+'_ell_x_smth'] = smooth(res[date+'_ell_x'],2*radius*1000,SIE,std)
+    res[date+'_ell_x_smth'] = smooth(res[date+'_ell_x'],2*radius*1000,SIE,std) #apply smoothing to each of the hyperparameters
     res[date+'_ell_y_smth'] = smooth(res[date+'_ell_y'],2*radius*1000,SIE,std)
     res[date+'_ell_t_smth'] = smooth(res[date+'_ell_t'],T,SIE,std)
     res[date+'_sf2_smth'] = smooth(res[date+'_sf2'],0.1,SIE,std)
@@ -254,12 +316,12 @@ ellXs = np.array([res[date+'_ell_x_smth'][IDs],res[date+'_ell_y_smth'][IDs],res[
 sn2xs = res[date+'_sn2_smth'][IDs]
 sf2xs = res[date+'_sf2_smth'][IDs]
 results = []
-for index in scattered jobs:
+for index in scattered jobs: #regenerate the predictions with the smoothed hyperparameters (now with optimisation=False)
     outputs = GPR3D(index,opt=False)
     results.append(outputs)
 results = COMM.gather(results, root=0)
 
-if COMM.rank == 0:
+if COMM.rank == 0: #recompile results
     fs = []
     sfs2 = []
     results = list(itertools.izip_longest(*results))
@@ -273,4 +335,4 @@ if COMM.rank == 0:
     res[date+'_interp_smth'] = fs_smth
     res[date+'_interp_error_smth'] = sfs2_smth
     print('finish:',datetime.datetime.now())
-    save(res,datapath+'/CS2S3_'+date+'_'+str(grid_res)+'km.pkl')
+    save(res,datapath+'/CS2S3_'+date+'_'+str(grid_res)+'km.pkl') #save dictionary as pickle file
