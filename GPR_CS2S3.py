@@ -157,9 +157,7 @@ def GPR3D(index,opt=True):
             sn2: noise variance hyperparameter
     """
     idr = X_tree.query_ball_point(x=X[index,:], r=radius*1000)
-    ID = []
-    for ix in range(len(X[idr])):
-        ID.extend(np.where((x_train==X[idr][ix,0]) & (y_train==X[idr][ix,1]))[0])
+    ID = (np.array([x_train,y_train]).T[None,:] == X[idr][:,None]).all(-1).any(0)
     inputs = np.array([x_train[ID],y_train[ID],t_train[ID]]).T
     outputs = z[ID]
     n = len(outputs)
