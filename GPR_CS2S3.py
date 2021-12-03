@@ -1,6 +1,6 @@
 ### Generate pan-Arctic radar freeboard estimates on a given day
 ### Author: William Gregory
-### Last updated: 27/01/2021
+### Last updated: 03/12/2021
 
 import numpy as np
 import os
