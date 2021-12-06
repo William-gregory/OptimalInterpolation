@@ -156,8 +156,7 @@ def GPR3D(index,opt=True):
             sf2: variance pre-factor hyperparameter
             sn2: noise variance hyperparameter
     """
-    idr = X_tree.query_ball_point(x=X[index,:], r=radius*1000)
-    ID = (xy_train[None,:] == X[idr][:,None]).all(-1).any(0)
+    ID = X_tree.query_ball_point(x=X[index,:], r=radius*1000)
     inputs = np.array([x_train[ID],y_train[ID],t_train[ID]]).T
     outputs = z[ID]
     n = len(outputs)
@@ -244,7 +243,7 @@ z = np.concatenate((z1,z2,z3,z4))
 IDs = np.where(~np.isnan(SIE)) #grid cell locations which contain sea ice
 X = np.array([x[IDs],y[IDs]]).T #put x,y positions of sea ice locations in a long vector
 xy_train = np.array([x_train,y_train]).T
-X_tree = scipy.spatial.cKDTree(X)
+X_tree = scipy.spatial.cKDTree(xy_train)
     
 selected_variables = range(X.shape[0]) #the number of tasks to be done (i.e., the number of grid cells to be interpolated)
 
