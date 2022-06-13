@@ -213,3 +213,65 @@ def SMLII(hypers, x, y, approx=False, M=None):
         dnlZ = np.ones(len(hypers)) * np.inf
     return nlZ, dnlZ
 
+
+def split_data(sat, xFB, yFB, background):
+    # wrapper for split data from different sat(ellite) data
+    # TODO: tidy this up
+    # TODO: add documentation
+
+    # this next part loops over all T days of training data and appends all the inputs/outputs into long vectors
+    x1 = []
+    y1 = []
+    t1 = []
+    z1 = []
+    x2 = []
+    y2 = []
+    t2 = []
+    z2 = []
+    x3 = []
+    y3 = []
+    t3 = []
+    z3 = []
+    x4 = []
+    y4 = []
+    t4 = []
+    z4 = []
+    m1 = []
+    m2 = []
+    m3 = []
+    m4 = []
+    for dayz in range(sat.shape[3]):
+        IDs_1 = np.where(~np.isnan(sat[:, :, 0, dayz]))
+        IDs_2 = np.where(~np.isnan(sat[:, :, 1, dayz]))
+        IDs_3 = np.where(~np.isnan(sat[:, :, 2, dayz]))
+        IDs_4 = np.where(~np.isnan(sat[:, :, 3, dayz]))
+        x1.extend(xFB[IDs_1])
+        x2.extend(xFB[IDs_2])
+        x3.extend(xFB[IDs_3])
+        x4.extend(xFB[IDs_4])
+        y1.extend(yFB[IDs_1])
+        y2.extend(yFB[IDs_2])
+        y3.extend(yFB[IDs_3])
+        y4.extend(yFB[IDs_4])
+        t1.extend(np.ones(np.shape(IDs_1)[1]) * dayz)
+        t2.extend(np.ones(np.shape(IDs_2)[1]) * dayz)
+        t3.extend(np.ones(np.shape(IDs_3)[1]) * dayz)
+        t4.extend(np.ones(np.shape(IDs_4)[1]) * dayz)
+        z1.extend(sat[:, :, 0, dayz][IDs_1])
+        z2.extend(sat[:, :, 1, dayz][IDs_2])
+        z3.extend(sat[:, :, 2, dayz][IDs_3])
+        z4.extend(sat[:, :, 3, dayz][IDs_4])
+        m1.extend(background[IDs_1])
+        m2.extend(background[IDs_2])
+        m3.extend(background[IDs_3])
+        m4.extend(background[IDs_4])
+    x_train = np.concatenate((x1, x2, x3, x4))
+    y_train = np.concatenate((y1, y2, y3, y4))
+    t_train = np.concatenate((t1, t2, t3, t4))
+    z = np.concatenate((z1, z2, z3, z4))
+    prior = np.concatenate((m1, m2, m3, m4))
+
+    return x_train, y_train, t_train, z, prior
+
+
+
