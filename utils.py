@@ -30,7 +30,7 @@ def grid_proj(lon_0=0, boundinglat=60, llcrnrlon=False,
     return p
 
 
-def readFB(grid_res, season, datapath):
+def readFB(grid_res, season, datapath, min_sie=0.15):
     """
     Read the input freeboard data (from all satellites) and sea ice extent (sie) mask.
     Returns:
@@ -64,7 +64,7 @@ def readFB(grid_res, season, datapath):
             dates.append(key)
     obs = np.array(obs).transpose(2, 3, 1, 0)
     sie = np.array(sie).transpose(1, 2, 0)
-    sie[sie < 0.15] = np.nan
+    sie[sie < min_sie] = np.nan
     return obs, sie, dates
 
 
@@ -214,6 +214,27 @@ def SMLII(hypers, x, y, approx=False, M=None):
     return nlZ, dnlZ
 
 
+def split_data2(sat, xFB, yFB, background):
+    # TODO: add a docstring
+    # NOTE: the order of the values here is not the same a previous implementation
+    # - would require a an axis swap?
+    # identify the points that are NaN in sat data
+    sat_nan = np.isnan(sat)
+    # get the index along each dimension where not NaN
+    non_nan = np.where(~sat_nan)
+    # get the x and y location values for these
+    x_train = xFB[non_nan[0], non_nan[1]]
+    y_train = yFB[non_nan[0], non_nan[1]]
+    # make a time index array
+    t_train = np.arange(sat.shape[-1])[non_nan[3]]
+    # background values
+    prior = background[non_nan[0], non_nan[1]]
+    # freeboard observations
+    z = sat[~sat_nan]
+
+    return x_train, y_train, t_train, z, prior
+
+
 def split_data(sat, xFB, yFB, background):
     # wrapper for split data from different sat(ellite) data
     # TODO: tidy this up
@@ -272,6 +293,29 @@ def split_data(sat, xFB, yFB, background):
     prior = np.concatenate((m1, m2, m3, m4))
 
     return x_train, y_train, t_train, z, prior
+
+
+def load_data(datapath, grid_res, season):
+    # grid
+    # TODO: look into bin function to better understand how this works
+    # shape (321,321)
+    x = np.load(datapath + '/x_' + str(grid_res) + 'km.npy')  # zonal grid positions
+    y = np.load(datapath + '/y_' + str(grid_res) + 'km.npy')  # meridional grid positions
+
+    # object to convert x,y positions to longitude, latitude
+    m = grid_proj(lon_0=360)
+    lon, lat = m(x, y, inverse=True)
+
+    # read in observations, sea ice and dates
+    obs, sie, dates = readFB(grid_res, season, datapath)
+
+    # another object to move lon, lat back to a (different?) x, y grid
+    # - define a new projection to test interpolating 1 pixel
+    mplot = grid_proj(llcrnrlon=-90, llcrnrlat=75, urcrnrlon=-152, urcrnrlat=82)
+    # zonal & meridional positions for new projection
+    xFB, yFB = mplot(lon, lat)
+
+    return obs, sie, dates, xFB, yFB, lat, lon
 
 
 
