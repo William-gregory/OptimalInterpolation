@@ -6,6 +6,8 @@ from scipy.spatial.distance import squareform, pdist, cdist
 import pickle
 import pyproj as proj
 
+from datetime import datetime as dt
+
 def grid_proj(lon_0=0, boundinglat=60, llcrnrlon=False,
               llcrnrlat=False, urcrnrlon=False, urcrnrlat=False):
 
@@ -214,7 +216,7 @@ def SMLII(hypers, x, y, approx=False, M=None):
     return nlZ, dnlZ
 
 
-def split_data2(sat, xFB, yFB, background):
+def split_data2(sat, xFB, yFB, *args):
     # TODO: add a docstring
     # NOTE: the order of the values here is not the same a previous implementation
     # - would require a an axis swap?
@@ -227,12 +229,14 @@ def split_data2(sat, xFB, yFB, background):
     y_train = yFB[non_nan[0], non_nan[1]]
     # make a time index array
     t_train = np.arange(sat.shape[-1])[non_nan[3]]
-    # background values
-    prior = background[non_nan[0], non_nan[1]]
     # freeboard observations
     z = sat[~sat_nan]
 
-    return x_train, y_train, t_train, z, prior
+    # additional arguments are expected to be 2-D, same shape as xFB, yFB
+    arg_out = [a[non_nan[0], non_nan[1]] for a in args]
+    # prior = background[non_nan[0], non_nan[1]]
+
+    return x_train, y_train, t_train, z, *arg_out
 
 
 def split_data(sat, xFB, yFB, background):
@@ -295,19 +299,28 @@ def split_data(sat, xFB, yFB, background):
     return x_train, y_train, t_train, z, prior
 
 
-def load_data(datapath, grid_res, season):
+def load_data(datapath, grid_res, season,
+              dates_to_datetime=False,
+              trim_xy=None, **kwargs):
+    # TODO: put x,y data loading in another function
     # grid
     # TODO: look into bin function to better understand how this works
     # shape (321,321)
     x = np.load(datapath + '/x_' + str(grid_res) + 'km.npy')  # zonal grid positions
     y = np.load(datapath + '/y_' + str(grid_res) + 'km.npy')  # meridional grid positions
 
+    # x,y can be a different size (one longer in each dim) than obs, sie
+    # - the below reduces the size
+    if trim_xy:
+        x = x[:-trim_xy, :-trim_xy]
+        y = y[:-trim_xy, :-trim_xy]
+
     # object to convert x,y positions to longitude, latitude
     m = grid_proj(lon_0=360)
     lon, lat = m(x, y, inverse=True)
 
     # read in observations, sea ice and dates
-    obs, sie, dates = readFB(grid_res, season, datapath)
+    obs, sie, dates = readFB(grid_res, season, datapath, **kwargs)
 
     # another object to move lon, lat back to a (different?) x, y grid
     # - define a new projection to test interpolating 1 pixel
@@ -315,7 +328,12 @@ def load_data(datapath, grid_res, season):
     # zonal & meridional positions for new projection
     xFB, yFB = mplot(lon, lat)
 
-    return obs, sie, dates, xFB, yFB, lat, lon
+    if dates_to_datetime:
+        dates = np.array([dt.strptime(d, "%Y%m%d") for d in dates], dtype="datetime64[D]")
+    else:
+        dates = np.array(dates)
+
+    return obs, sie, np.array(dates), xFB, yFB, lat, lon
 
 
 
