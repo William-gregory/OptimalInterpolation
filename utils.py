@@ -7,6 +7,8 @@ import pickle
 import pyproj as proj
 
 from datetime import datetime as dt
+import subprocess
+import re
 
 def grid_proj(lon_0=0, boundinglat=60, llcrnrlon=False,
               llcrnrlat=False, urcrnrlon=False, urcrnrlat=False):
@@ -336,4 +338,57 @@ def load_data(datapath, grid_res, season,
     return obs, sie, np.array(dates), xFB, yFB, lat, lon
 
 
+def get_git_information():
+    """
+    helper function to get current git info
+    - will get branch, current commit, last commit message
+    - and the current modified file
 
+    Returns
+    -------
+    dict with keys
+        branch: branch name
+        commit: current commit
+        details: from last commit message
+        modified: files modified since last commit, only provided if there were any modified files
+
+    """
+    # get current branch
+    try:
+        branch = subprocess.check_output(["git", "branch", "--show-current"], shell=False)
+        branch = branch.decode("utf-8").lstrip().rstrip()
+    except Exception as e:
+        branches = subprocess.check_output(["git", "branch"], shell=False)
+        branches = branches.decode("utf-8").split("\n")
+        branches = [b.lstrip().rstrip() for b in branches]
+        branch = [re.sub("^\* ", "", b) for b in branches if re.search("^\*", b)][0]
+
+    # current commit hash
+    cur_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], shell=False)
+    cur_commit = cur_commit.decode("utf-8").lstrip().rstrip()
+
+    # last message
+    last_msg = subprocess.check_output(["git", "log", "-1"], shell=False)
+    last_msg = last_msg.decode("utf-8").lstrip().rstrip()
+    last_msg = last_msg.split("\n")
+    last_msg = [lm.lstrip().rstrip() for lm in last_msg]
+    last_msg = [lm for lm in last_msg if len(lm) > 0]
+
+    # modified files since last commit
+    mod = subprocess.check_output(["git", "status", "-uno"], shell=False)
+    mod = mod.decode("utf-8").split("\n")
+    mod = [m.lstrip().rstrip() for m in mod]
+    # keep only those that begin with mod
+    mod = [re.sub("^modified:", "", m).lstrip() for m in mod if re.search("^modified", m)]
+
+    out = {
+        "branch": branch,
+        "commit": cur_commit,
+        "details": last_msg
+    }
+
+    # add modified files if there are any
+    if len(mod) > 0:
+        out["modified"] = mod
+
+    return out
