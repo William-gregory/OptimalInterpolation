@@ -238,7 +238,7 @@ def split_data2(sat, xFB, yFB, *args):
     arg_out = [a[non_nan[0], non_nan[1]] for a in args]
     # prior = background[non_nan[0], non_nan[1]]
 
-    return x_train, y_train, t_train, z, *arg_out
+    return [x_train, y_train, t_train, z, *arg_out]
 
 
 def split_data(sat, xFB, yFB, background):
