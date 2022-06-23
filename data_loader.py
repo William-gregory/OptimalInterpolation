@@ -5,6 +5,8 @@ import os
 import re
 import pickle
 
+from functools import reduce
+
 from OptimalInterpolation.utils import readFB
 from OptimalInterpolation import get_data_path
 
@@ -79,7 +81,8 @@ class DataLoader():
                       sat_list=None,
                       season="2018-2019",
                       grid_res="25km",
-                      combine_all=True):
+                      combine_all=True,
+                      common_dates=True):
         # TODO: only allow for one season at a time
 
         if sat_data_dir is None:
@@ -106,7 +109,32 @@ class DataLoader():
 
             sats[s] = self._concat_dict_date_data(_)
 
-        # TODO: should have a double check the dates all align
+        # ---
+        # date alignment
+        # ---
+
+        # TODO: allow for all dates to be returned, wont be able concatenate
+        # take only the intersection
+
+        if common_dates:
+            sat_dates = {k: v['dims']['date'] for k, v in sats.items()}
+
+            common_dates = reduce(lambda x, y: np.intersect1d(x, y),
+                                  [v for v in sat_dates.values()])
+
+            if self.verbose:
+                print(f"found: {len(common_dates)} common_dates in the data, will use only these dates")
+                if self.verbose > 1:
+                    for k, v in sats.items():
+                        print(f"{k}: {len(v['dims']['date'])}")
+
+            # for each dataset only take the dates which are common
+            for k in sats.keys():
+                v = sats[k]
+                date_bool = np.in1d(v['dims']['date'], common_dates)
+                v['data'] = v['data'][..., date_bool]
+                v['dims']['date'] = v['dims']['date'][date_bool]
+
 
         if combine_all:
             sat_dim = np.array(list(sats))
@@ -125,20 +153,23 @@ class DataLoader():
             }
 
             self.obs = {"data": tmp, "dims": dims}
-
         else:
             self.obs = sats
 
     def load_aux_data(self,
                       aux_data_dir=None,
                       grid_res=None,
-                      season=None):
+                      season=None,
+                      load_sie=True):
         # TODO: set a default dir
 
         assert season is not None, f"season not provided, please provided"
 
         # get the grid_res to use
         grid_res = self.grid_res if grid_res is None else grid_res
+
+        if self.verbose:
+            print(f"loading 'aux' data for season='{season}', grid_res='{grid_res}'")
 
         # get the seasons to use
         # seasons = self.seasons if seasons is None else seasons
@@ -154,8 +185,23 @@ class DataLoader():
         self.aux = {p: np.load(os.path.join(aux_data_dir, f"{p}_{grid_res}.npy"))
                     for p in prefix_list}
 
+        if load_sie:
+            self.load_sie_data(sie_data_dir=os.path.join(aux_data_dir, "SIE"),
+                               grid_res=grid_res,
+                               season=season)
+
+    def load_sie_data(self,
+                      sie_data_dir=None,
+                      grid_res=None,
+                      season=None):
+
+        assert season is not None, f"season not provided, please provided"
+
+        # get the grid_res to use
+        grid_res = self.grid_res if grid_res is None else grid_res
+
         # TODO: maybe don't have this nested, i.e. put in seperate function?
-        sie_data_dir = os.path.join(aux_data_dir, "SIE")
+        # sie_data_dir = os.path.join(aux_data_dir, "SIE")
         assert os.path.exists(sie_data_dir), f"sie_data_dir:\n{sie_data_dir}\ndoes not exist"
 
         # ---
@@ -166,6 +212,10 @@ class DataLoader():
         with open(os.path.join(sie_data_dir, f"SIE_masking_{grid_res}_{season}_season.pkl"), "rb") as f:
             _ = pickle.load(f)
         self.sie = self._concat_dict_date_data(_)
+
+    def take_intersect_of_dates(self, attr_list=None):
+        attr_list = attr_list if isinstance(attr_list, list) else []
+
 
     def _concat_dict_date_data(self, d):
         # dict keys assumed to dates, in YYYYMMDD format
