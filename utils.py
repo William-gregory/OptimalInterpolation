@@ -3,6 +3,8 @@
 import numpy as np
 from numpy.linalg import multi_dot as mdot
 from scipy.spatial.distance import squareform, pdist, cdist
+from pyproj import Transformer
+
 import pickle
 import pyproj as proj
 
@@ -392,3 +394,14 @@ def get_git_information():
         out["modified"] = mod
 
     return out
+
+
+def WGS84toEASE2_New(lon, lat):
+    """map from one mapping to another """
+    # taken from /home/cjn/OI_PolarSnow/EASE/CS2S3_CPOM_bin_EASE.py
+    EASE2 = "+proj=laea +lon_0=0 +lat_0=90 +x_0=0 +y_0=0 +ellps=WGS84 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"
+    WGS84 = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
+    transformer = Transformer.from_crs(WGS84, EASE2)
+    x, y = transformer.transform(lon, lat)
+    return x, y
+
