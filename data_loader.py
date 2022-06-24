@@ -7,7 +7,7 @@ import pickle
 
 from functools import reduce
 
-from OptimalInterpolation.utils import readFB
+from OptimalInterpolation.utils import readFB, split_data2
 from OptimalInterpolation import get_data_path
 
 # TODO: tidy up below
@@ -213,9 +213,39 @@ class DataLoader():
             _ = pickle.load(f)
         self.sie = self._concat_dict_date_data(_)
 
-    def take_intersect_of_dates(self, attr_list=None):
-        attr_list = attr_list if isinstance(attr_list, list) else []
+    @staticmethod
+    def coarse_grid(grid_space, grid_space_offset=0, x_size=320, y_size=320):
+        # create a 2D array of False except along every grid_space points
+        # - can be used to select a subset of points from a grid
+        # NOTE: first dimension is treated as y dim
+        cb_y, cb_x = np.zeros(x_size, dtype='bool'), np.zeros(y_size, dtype='bool')
+        cb_y[(np.arange(len(cb_y)) % grid_space) == grid_space_offset] = True
+        cb_x[(np.arange(len(cb_x)) % grid_space) == grid_space_offset] = True
+        return cb_y[:, None] * cb_x[None, :]
 
+    @staticmethod
+    def data_select(date, dates, obs, xFB, yFB, days_ahead=4, days_behind=4):
+        # for a given date select
+        print("selecting data")
+
+        # find day location based on given date value
+        day = np.where(np.in1d(dates, date))[0][0]
+
+        # check the days about the window
+        assert (day - days_behind) >= 0, \
+            f"date:{date}, days_behind:{days_behind} gives day-days_behind: {day - days_behind}, which must be >= 0"
+
+        assert (day + days_ahead) <= (len(dates) - 1), \
+            f"date:{date}, days_ahead:{days_ahead} gives day+days_behind= {day + days_ahead}, " \
+            f"which must be <= (len(dates) - 1) = {len(dates) - 1}"
+
+        # the T days of training data from all satellites
+        sat = obs[:, :, :, (day - days_behind):(day + days_ahead + 1)]
+
+        # select data
+        x_train, y_train, t_train, z = split_data2(sat, xFB, yFB)
+
+        return x_train, y_train, t_train, z
 
     def _concat_dict_date_data(self, d):
         # dict keys assumed to dates, in YYYYMMDD format
