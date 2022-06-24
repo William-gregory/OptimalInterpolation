@@ -9,6 +9,7 @@ import os
 import re
 import datetime
 import subprocess
+import warnings
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -24,41 +25,13 @@ from OptimalInterpolation import get_data_path, get_path
 from OptimalInterpolation.utils import grid_proj, get_git_information, load_data, split_data2
 
 
-def data_select(date, dates, obs, xFB, yFB, days_ahead=4, days_behind=4):
-    # for a given date select
-    print("selecting data")
-
-    # find day location based on given date value
-    day = np.where(np.in1d(dates, date))[0][0]
-
-    # check the days about the window
-    assert (day-days_behind) >= 0, \
-        f"date:{date}, days_behind:{days_behind} gives day-days_behind: {day-days_behind}, which must be >= 0"
-
-    assert (day+days_ahead) <= (len(dates) - 1), \
-        f"date:{date}, days_ahead:{days_ahead} gives day+days_behind= {day+days_ahead}, " \
-        f"which must be <= (len(dates) - 1) = {len(dates) - 1}"
-
-    # the T days of training data from all satellites
-    sat = obs[:, :, :, (day-days_behind):(day+days_ahead+1)]
-
-    # select data
-    x_train, y_train, t_train, z = split_data2(sat, xFB, yFB)
-
-    return x_train, y_train, t_train, z
-
-
-def coarse_grid(grid_space, grid_space_offset=0, x_size=320, y_size=320):
-    # create a 2D array of False except along every grid_space points
-    # - can be used to select a subset of points from a grid
-    # NOTE: first dimension is treated as y dim
-    cb_y, cb_x = np.zeros(x_size, dtype='bool'), np.zeros(y_size, dtype='bool')
-    cb_y[(np.arange(len(cb_y)) % grid_space) == grid_space_offset] = True
-    cb_x[(np.arange(len(cb_x)) % grid_space) == grid_space_offset] = True
-    return cb_y[:, None] * cb_x[None, :]
-
 
 if __name__ == "__main__":
+
+    # ***** CHANGE THIS ON COLAB ******
+    output_base_dir = get_path("results")
+    print(f"output_base_dir: {output_base_dir}")
+
 
     # TODO: let config be an input (via sys.argv)
     # TODO: have an option to calculate using the pure python approach
@@ -75,17 +48,19 @@ if __name__ == "__main__":
     # ---
 
     config = {
-        "dates": ["20181223"],
+        "dates": ["20181201"],
         "inclusion_radius": 300,
         "days_ahead": 4,
         "days_behind": 4,
         "data_dir": "package",
         "season": "2018-2019",
         "grid_res": 25,
-        "coarse_grid_spacing": 4,
+        "coarse_grid_spacing": 1,
         "min_inputs": 10,
         "verbose": 1,
-        "output_dir": get_path("results")
+        "hold_out": ["S3A"],
+        "predict_on_hold": True,
+        "output_dir": os.path.join(output_base_dir, "ease_projection")
     }
 
     print("using config:")
@@ -112,6 +87,9 @@ if __name__ == "__main__":
     days_behind = config.get("days_behind", 4)
 
     season = config.get("season", "2018-2019")
+    # CURRENTLY ONLY ALLOW 2018-2019
+    assert season == "2018-2019"
+
     grid_res = config.get("grid_res", 25)
     # min sea ice cover - when loading data set sie to nan if < min_sie
     min_sie = config.get("min_sie", 0.15)
@@ -122,9 +100,31 @@ if __name__ == "__main__":
     # min number of inputs to calibrate GP on
     min_inputs = config.get("min_inputs", 10)
 
-    output_dir = config["output_dir"]
-    assert os.path.exists(output_dir), f"output_dir: {output_dir} \n does not exists, expect it to"
+    # -
+    # hold out data: used for cross validation
+    hold_out = config.get("hold_out", [])
 
+    # predict only on hold out locations
+    pred_on_hold_out = config.get("predict_on_hold", False)
+
+    if len(hold_out):
+        print(f"will hold_out data from:\n{hold_out}\n(from prediction date)")
+        print(f"pred_on_hold_out (predict only on hold out points) = {pred_on_hold_out}")
+
+    output_dir = config["output_dir"]
+
+
+    # make an output dir based on parameters
+    # - recall date subdirectories will be added
+    # holdouts = ""
+    tmp_dir = f"radius{incl_rad}_daysahead{days_ahead}_daysbehind{days_behind}_gridres{grid_res}_season{season}_coarsegrid{coarse_grid_spacing}_holdout{'|'.join(hold_out)}"
+    output_dir = os.path.join(output_dir, tmp_dir)
+
+    os.makedirs(output_dir, exist_ok=True)
+    # assert os.path.exists(output_dir), f"output_dir: {output_dir} \n does not exists, expect it to"
+
+
+    # run time info
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     run_info = {
@@ -138,63 +138,89 @@ if __name__ == "__main__":
         print("issue getting git_info, check current working dir")
         pass
 
+    config["run_info"] = run_info
+
     # ---
     # write config to file
     # --
 
-    config["run_info"] = run_info
+    # TODO: put this somewhere else - to avoid over writing
+
     with open(os.path.join(output_dir, "input_config.json"), "w") as f:
         json.dump(config, f, indent=4)
+
+    # In[ ]:
+
+    t_total0 = time.time()
 
     # ----
     # load data
     # ----
+    print("loading data")
+    # obs, sie, dates, xFB, yFB, lat, lon = load_data(datapath, grid_res, season,
+    #                                                 dates_to_datetime=False,
+    #                                                 trim_xy=1, min_sie=min_sie)
 
     # create a DataLoader object
-    dl = DataLoader()
+    dl = DataLoader(grid_res=f"{grid_res}km", seasons=[season], verbose=2)
 
     # load aux(iliary) data
     dl.load_aux_data(aux_data_dir=get_data_path("aux"),
                      season=season)
     # load obs(servation) data
-    dl.load_obs_data(sat_data_dir=get_data_path("CS2S3_CPOM"))
+    dl.load_obs_data(sat_data_dir=get_data_path("CS2S3_CPOM"),
+                     grid_res=f"{grid_res}km")
 
-    # print("loading data")
-    # obs, sie, dates, xFB, yFB, lat, lon = load_data(datapath, grid_res, season,
-    #                                                 dates_to_datetime=False,
-    #                                                 trim_xy=1, min_sie=min_sie)
+    # check hold_out values are valid (satellite names)
+    for ho in hold_out:
+        assert ho in dl.obs['dims']['sat'], f"hold_out sat: {ho} not in obs dims:\n{dl.obs['dims']['sat']}"
+
+    # --
+    # data for prior mean - review
+    # --
 
     # this contains a (x,y,t) numpy array of only first-year-ice freeboards.
     # We use this to define the prior mean
+    # cs2_FYI = np.load(
+    #     datapath + '/CS2_25km_FYI_20181101-20190428.npy')
+
+    # # HARDCODED: drop the first 25 days to align with obs data
+    # # TODO: this should be done in a more systematic way
+    # cs2_FYI = cs2_FYI[..., 25:]
+
     cs2_FYI = np.load(
-        datapath + '/CS2_25km_FYI_20181101-20190428.npy')
+        datapath + f'/aux/CS2_{grid_res}km_FYI_20181101-20190428.npy')
     # create an array of dates
     cs2_FYI_dates = np.arange(np.datetime64("2018-11-01"), np.datetime64("2019-04-29"))
     cs2_FYI_dates = np.array([re.sub("-", "", i) for i in cs2_FYI_dates.astype(str)])
 
-
-    # NOTE:
-
-    # HARDCODED: drop the first 25 days to align with obs data
-    # TODO: this should be done in a more systematic way
-    # cs2_FYI = cs2_FYI[..., 25:]
-
-    # TODO: these points represent the bin edges, should change to be centers
     # trimming to align with data
     xFB = dl.aux['x'][:-1, :-1]
     yFB = dl.aux['y'][:-1, :-1]
     lonFB = dl.aux['lon'][:-1, :-1]
     latFB = dl.aux['lat'][:-1, :-1]
 
+    # In[ ]:
+
+    # NOTE: the t values are integers in window, not related to actual dates
+    # x_train, y_train, t_train, z = data_select(date, dates, obs, xFB, yFB,
+    #                                         days_ahead=days_ahead,
+    #                                         days_behind=days_behind)
+    # dl.obs['data'].shape
+    # xFB.shape
+
+    # In[ ]:
+
     # ----
     # for each date calculate hyper-parameters, make predictions, store values
     # ----
 
     # make a coarse grid - can be used to select a subset of points
-    cgrid = coarse_grid(coarse_grid_spacing,
-                        grid_space_offset=0,
-                        x_size=xFB.shape[1],
-                        y_size=yFB.shape[0])
+    cgrid = dl.coarse_grid(coarse_grid_spacing,
+                           grid_space_offset=0,
+                           x_size=xFB.shape[1],
+                           y_size=yFB.shape[0])
+
     # --
     # extract data needed for training
     # --
@@ -205,7 +231,6 @@ if __name__ == "__main__":
     obs = dl.obs['data']
     # sea ice extent
     sie = dl.sie['data']
-
 
     # bool array used for projecting onto neighbour
     # - used because easy to select from sie_day at the same time
@@ -218,17 +243,49 @@ if __name__ == "__main__":
             print(f"date_dir: {date_dir}\n does not exists, creating")
             os.makedirs(date_dir)
 
+        # ---
+        # write config to file - will end up doing this for each date
+        # ---
+
+        with open(os.path.join(date_dir, "input_config.json"), "w") as f:
+            json.dump(config, f, indent=4)
+
         # results will be written to file
         res_file = os.path.join(date_dir, "results.csv")
         pred_file = os.path.join(date_dir, "prediction.csv")
         # bad results will be written to :
         skip_file = os.path.join(date_dir, "skipped.csv")
 
+        # --
+        # hold out data
+        # --
+
+        # let hold_out_bool flag up where the hold out locations are
+        # - for the current date
+        hold_out_bool = np.zeros(dl.obs['data'].shape[:2], dtype=bool)
+
+        if len(hold_out):
+            print("some hold out data provided")
+            print(hold_out)
+            # copy observation data
+            # - so can set hold_out data to np.nan
+            obs = dl.obs['data'].copy()
+
+            for ho in hold_out:
+                print(f"removing: {ho} data")
+                # get the location of the hold_out (sat)
+                sat_loc = np.in1d(dl.obs['dims']['sat'], ho)
+                date_loc = np.in1d(dl.obs['dims']['date'], date)
+                # get hold_out data observations locations
+                hold_out_bool[~np.isnan(obs[:, :, sat_loc, date_loc][..., 0])] = True
+                # set the observations at the hold out location to nan
+                obs[:, :, sat_loc, date_loc] = np.nan
+
         # select x,y,t and z (freeboard) data for date
         # NOTE: the t values are integers in window, not related to actual dates
-        x_train, y_train, t_train, z = data_select(date, dates, obs, xFB, yFB,
-                                                   days_ahead=days_ahead,
-                                                   days_behind=days_behind)
+        x_train, y_train, t_train, z = dl.data_select(date, dates, obs, xFB, yFB,
+                                                      days_ahead=days_ahead,
+                                                      days_behind=days_behind)
 
         # combine xy data - used for KDtree
         xy_train = np.array([x_train, y_train]).T
@@ -243,15 +300,30 @@ if __name__ == "__main__":
         # prior mean
         # ---
 
+        # mean = np.nanmean(cs2_FYI[..., (day - days_behind):(day + days_ahead + 1)]).round(4)
         # TODO: should have checks that range is valid here
+        print("using CS2_FYI data for prior mean - needs review")
         cday = np.where(np.in1d(cs2_FYI_dates, date))[0][0]
+        # TODO: should this be trailing 31 days?
         mean = np.nanmean(cs2_FYI[..., (cday - days_behind):(cday + days_ahead + 1)]).round(4)
 
         # ---
         # select locations with sea ice cover exists to predict on
         # ---
 
+        # select bool will determine which locations are predicted for
         select_bool = ~np.isnan(sie[..., day]) & cgrid
+
+        # if predicting only on the hold out locations, include those in select_bool
+        if pred_on_hold_out:
+            print("will predict only on hold_out data locations (non nan)")
+            # require there are at least some positions to predict on
+            assert hold_out_bool.any(), f"pred_on_hold_out: {pred_on_hold_out}\nhowever hold_out_bool.any(): {hold_out_bool.any()}"
+
+            select_bool = select_bool & hold_out_bool
+
+        if not select_bool.any():
+            warnings.warn("there are no points to predict on, will do nothing, check configuration")
 
         # get the x, y locations
         # x_loc, y_loc = xFB[select_bool], yFB[select_bool]
@@ -270,15 +342,19 @@ if __name__ == "__main__":
             x_ = xFB[grid_loc]
             y_ = yFB[grid_loc]
 
-            # # TODO: move this above
+            # TODO: move this above
+            # - this does not work as expect - use the long, lat data from aux
             # mplot = grid_proj(llcrnrlon=-90, llcrnrlat=75, urcrnrlon=-152, urcrnrlat=82)
             # ln, lt = mplot(x_, y_, inverse=True)
+
+            # getting the pre-calculated lon, lat data
+            ln = lonFB[grid_loc]
+            lt = latFB[grid_loc]
 
             # get the points from the input data within radius
             ID = X_tree.query_ball_point(x=[x_, y_],
                                          r=incl_rad * 1000)
 
-            # if there were too few points then skip
             if len(ID) < min_inputs:
                 print(f"for (x,y)= ({x_:.2f}, {y_:.2f})\nthere were only {len(ID)} < {min_inputs} points, skipping")
                 tmp = pd.DataFrame({"grid_loc_0": grid_loc[0],
@@ -326,7 +402,6 @@ if __name__ == "__main__":
                                       np.atleast_1d(m.kernel.variance.numpy()),
                                       np.atleast_1d(m.likelihood.variance.numpy())])
 
-
             lscale = {nn: m.kernel.lengthscales.numpy()[_]
                       for _, nn in enumerate(["ls_x", "ls_y", "ls_t"])}
             res = {
@@ -353,7 +428,6 @@ if __name__ == "__main__":
             tmp.to_csv(res_file, mode="a", header=not os.path.exists(res_file),
                        index=False)
 
-
             # ---
             # project to points near by, based on grid spacing
             # ---
@@ -361,6 +435,8 @@ if __name__ == "__main__":
             # extract parameters / projection
             # - select neighbouring points
             # TODO: see if there is a neater way of doing this,
+
+            t0 = time.time()
 
             g0, g1 = grid_loc
             l0 = np.max([0, g0 - coarse_grid_spacing])
@@ -377,11 +453,15 @@ if __name__ == "__main__":
 
             x_s = xFB[n_select_loc][:, None]
             y_s = yFB[n_select_loc][:, None]
+            lon_s = lonFB[n_select_loc][:, None]
+            lat_s = latFB[n_select_loc][:, None]
             t_s = np.ones(len(x_s))[:, None] * days_behind
             xs = np.concatenate([x_s, y_s, t_s], axis=1)
 
             y_pred = m.predict_y(Xnew=xs)
             f_pred = m.predict_f(Xnew=xs)
+
+            t1 = time.time()
 
             pred = {
                 "grid_loc_0": grid_loc[0],
@@ -390,10 +470,13 @@ if __name__ == "__main__":
                 "proj_loc_1": n_select_loc[1],
                 "x": x_s[:, 0],
                 "y": y_s[:, 0],
-                "f*": f_pred[0].numpy()[:,0],
-                "f*_var": f_pred[1].numpy()[:,0],
-                "y_var": y_pred[1].numpy()[:,0],
-                "mean": mean
+                "lon": lon_s[:, 0],
+                "lat": lat_s[:, 0],
+                "f*": f_pred[0].numpy()[:, 0],
+                "f*_var": f_pred[1].numpy()[:, 0],
+                "y_var": y_pred[1].numpy()[:, 0],
+                "mean": mean,
+                "run_time": t1 - t0
             }
 
             tmp = pd.DataFrame(pred)
@@ -402,7 +485,35 @@ if __name__ == "__main__":
             tmp.to_csv(pred_file, mode="a", header=not os.path.exists(pred_file),
                        index=False)
 
+    # In[ ]:
+
+    t_total1 = time.time()
+    print(f"total run time: {t_total1 - t_total0:.2f}")
+
+    with open(os.path.join(output_dir, "total_runtime.txt"), "+w") as f:
+        f.write(f"runtime: {t_total1 - t_total0:.2f} seconds")
+
+    # In[ ]:
+
+    # In[ ]:
+
+    # # from will
+    # import cartopy.crs as ccrs
+    # import cartopy.feature as cfeat
+
+    # fig, ax = plt.subplots(1, figsize=(5, 5),
+    #                        subplot_kw=dict(projection=ccrs.NorthPolarStereo()))
+    # ax.coastlines(resolution='50m', color='white')
+    # ax.add_feature(cfeat.LAKES, color='white', alpha=.5)
+    # # ax.add_feature(cfeat.RIVERS, color='white', alpha=.1)
+    # ax.add_feature(cfeat.LAND, color=(0.8, 0.8, 0.8))
+
+    # ax.set_extent([-180, 180, 60, 90], ccrs.PlateCarree())  # lon_min,lon_max,lat_min,lat_max
+
+    # plt.show()
+
+    # In[ ]:
 
 
 
-            # print(f"num inputs: {len(ID)}, run_time: {run_time}")
+
