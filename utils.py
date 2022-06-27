@@ -11,6 +11,8 @@ import pyproj as proj
 from datetime import datetime as dt
 import subprocess
 import re
+import os
+import shutil
 
 def grid_proj(lon_0=0, boundinglat=60, llcrnrlon=False,
               llcrnrlat=False, urcrnrlon=False, urcrnrlat=False):
@@ -404,4 +406,61 @@ def WGS84toEASE2_New(lon, lat):
     transformer = Transformer.from_crs(WGS84, EASE2)
     x, y = transformer.transform(lon, lat)
     return x, y
+
+
+def move_to_archive(top_dir, file_names=None, suffix="", verbose=False):
+    """
+    Move file(s) matching a pattern to an 'archive' directory, adding suffixes if specified
+
+    Parameters
+    ----------
+    top_dir: str, specifying path to existing directory containing files to archive
+    file_names: str or list of str, default None. file names to move to archive
+    suffix: str, default "", to be added to file names (before file type) before move to archive
+
+    Returns
+    -------
+    None
+
+    """
+
+    assert os.path.exists(top_dir), f"top_dir:\n{top_dir}\ndoes not exist, expecting it to"
+
+    assert file_names is not None, f"file_names not specified"
+
+    # get the archive directory
+    adir = os.path.join(top_dir, "archive")
+    os.makedirs(adir, exist_ok=True)
+
+    files_in_dir = os.listdir(top_dir)
+
+    # check for files names
+    for fn in file_names:
+        if verbose:
+            print("-"*10)
+        # see if file names exists folder - has to be an exact match
+        if fn in files_in_dir:
+
+            _ = os.path.splitext(fn)
+            # make a file name for the destination (add suffix before extension)
+            fna = "".join([_[0], suffix, _[1]])
+
+            # source and destination files
+            src = os.path.join(top_dir, fn)
+            dst = os.path.join(adir, fna)
+
+            if verbose:
+                print(f"{fn} moving to archive")
+                print(f"file name in archive: {fna}")
+            # move file
+            shutil.move(src, dst)
+
+        else:
+            print(f"{fn} not found")
+
+
+if __name__ == "__main__":
+
+    pass
+
 
