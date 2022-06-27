@@ -7,8 +7,12 @@ import pickle
 
 from functools import reduce
 
-from OptimalInterpolation.utils import readFB, split_data2
+from scipy.interpolate import interp2d, griddata
+
+from OptimalInterpolation.utils import readFB, split_data2, grid_proj, WGS84toEASE2_New
 from OptimalInterpolation import get_data_path
+
+
 
 # TODO: tidy up below
 # TODO: add docstrings
@@ -278,9 +282,145 @@ class DataLoader():
         """wrapper for readFB function"""
         return readFB(**kwargs)
 
+    @staticmethod
+    def _parse_file_name(fn):
+        _ = fn.split("_")
+        out = {
+            "date": _[1],
+            "grid_res": _[2],
+            "window": _[3],
+            "radius": _[5]
+        }
+        return out
+
+    def read_previous_data(self,
+                           pkl_dir,
+                           pkl_regex="\.pkl$",
+                           parse_file_name_func=None):
+        # TODO: allow for only selected data to be read in, i.e. just 'interp' or 'ell_x'
+
+        # read previously generated (pickle) data in
+        pfiles = [i for i in os.listdir(pkl_dir) if re.search(pkl_regex, i)]
+
+        # function to parse attributes (date specifically) from (pickle) file name
+        if parse_file_name_func is None:
+            parse_file_name_func = self._parse_file_name
+
+        # get the date from the file name
+        date_file = {parse_file_name_func(pf)['date']: pf
+                     for pf in pfiles}
+
+        # get the sorted dates - assumes dates can be sorted, i.e. in YYYYMMDD format
+        sort_dates = np.sort(np.array([k for k in date_file.keys()]))
+
+        # store data in dict
+        res = {}
+
+        # select_data = select_data
+
+        # read data in
+        if self.verbose:
+            print("reading in data")
+        for sd in sort_dates:
+            if self.verbose > 2:
+                print(sd)
+            pf = date_file[sd]
+            with open(os.path.join(pkl_dir, pf), "rb") as f:
+                fb = pickle.load(f)
+
+            for k, v in fb.items():
+
+                data_name = "_".join(k.split("_")[1:])
+                if data_name in res:
+                    res[data_name] = np.concatenate([res[data_name], v[..., None]], axis=-1)
+                else:
+                    # add a dimension, corresponding to date
+                    res[data_name] = v[..., None]
+
+        # add a dims dict
+        # HARDCODED: x,y values - should probably read them from file
+        res['dims'] = {
+            "y":  np.arange(0, 8e6, 5e4),
+            "x": np.arange(0, 8e6, 5e4),
+            "date": sort_dates
+        }
+
+        return res
+
+
+    def interpolate_previous_data(self,
+                                  res,
+                                  xnew,
+                                  ynew,
+                                  keys_to_interp=None):
+        # TODO: add doc string
+        # TODO: add an option to only take points where there is sie
+        # TODO: the mapping to a different projection should be reviewed
+        #
+        if keys_to_interp is None:
+            if self.verbose:
+                print("no keys_to_interp provided, getting all")
+            keys_to_interp = [k for k in res.keys() if k != "dims"]
+
+        for k in keys_to_interp:
+            assert k in res.keys(), \
+                f"in keys_to_interp there was {k} which is not available\navailable keys:\n{list(res.keys())}"
+
+        # make a meshgrid for the current points
+        x_, y_ = np.meshgrid(res['dims']['x'], res['dims']['y'])
+
+        # map (old) points to lon, lat
+        m = grid_proj(lon_0=360)
+        ln, lt = m(x_, y_, inverse=True)
+
+        # old points on new x,y grid
+        xn, yn = WGS84toEASE2_New(ln, lt)
+
+        # pairwise points to interpolate on
+        xi = np.concatenate([xnew.flatten()[:, None], ynew.flatten()[:, None]], axis=1)
+
+        # store output in a dict
+        out = {}
+
+        for k in keys_to_interp:
+            if self.verbose:
+                print(k)
+            # select the data to be interpolated
+            kdata = res[k]
+
+            # create an array to populate with values
+            out[k] = np.full(xnew.shape + (kdata.shape[-1],), np.nan)
+
+            for id in range(kdata.shape[-1]):
+
+                data = kdata[..., id]
+
+                # identify the missing / nan points, just to exclude those
+                has_val = ~np.isnan(data)
+
+                # TODO: review this function
+                z = griddata(points=(xn[has_val], yn[has_val]),
+                             values=data[has_val],
+                             xi=xi,
+                             method='linear',
+                             fill_value=np.nan)
+
+                # reshape the output to be 2d
+                z = z.reshape(xnew.shape)
+
+                out[k][..., id] = z
+
+        # store dimenson data
+        out['dims'] = {
+            "y":  ynew[:, 0],
+            "x": xnew[0, :],
+            "date": res['dims']['date']
+        }
+
+        return out
+
 
 if __name__ == "__main__":
-
 
     dl = DataLoader()
 
@@ -291,9 +431,10 @@ if __name__ == "__main__":
     aux_data_dir = get_data_path("aux")
 
     # load aux data
-    dl.load_aux_data(aux_data_dir=aux_data_dir, season="2018-2019")
+    dl.load_aux_data(aux_data_dir=aux_data_dir, grid_res="50km", season="2018-2019")
     # load sat data
-    dl.load_obs_data(sat_data_dir=sat_data_dir, season="2018-2019")
+    dl.load_obs_data(sat_data_dir=sat_data_dir, grid_res="50km", season="2018-2019")
 
     # data is store in a dict with keys 'data' and 'dims'
     aux, sie, obs = dl.aux, dl.sie, dl.obs
+
