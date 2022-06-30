@@ -222,6 +222,58 @@ def SMLII(hypers, x, y, approx=False, M=None):
     return nlZ, dnlZ
 
 
+def SMLII_mod(hypers, x, y, approx=False, M=None, grad=True):
+    """
+    Objective function to minimise when optimising the model
+    hyperparameters. This function is the negative log marginal likelihood.
+    Inputs:
+            hypers: initial guess of hyperparameters
+            x: inputs (vector of size n x 3)
+            y: outputs (freeboard values from all satellites, size n x 1)
+            approx: Boolean, whether to use Nyström approximation method
+            M: number of training points to use in Nyström approx (integer scalar)
+    Returns:
+            nlZ: negative log marginal likelihood
+            dnLZ: gradients of the negative log marginal likelihood
+    """
+    # ell = [np.exp(hypers[0]), np.exp(hypers[1]), np.exp(hypers[2])]
+    # sf2 = np.exp(hypers[3])
+    # sn2 = np.exp(hypers[4])
+    ell = np.exp(hypers[:-2])
+    sf2 = np.exp(hypers[-2])
+    sn2 = np.exp(hypers[-1])
+
+    n = len(y)
+    Kx, dK = SGPkernel(x, grad=True, ell=ell, sigma=sf2)
+    try:
+        if approx:
+            Ki, A, det = Nystroem(x, y, M=M, ell=ell, sf2=sf2, sn2=sn2, opt=True)
+            nlZ = np.dot(y.T, A) / 2 + det + n * np.log(2 * np.pi) / 2
+            Q = Ki - np.dot(A, A.T)
+        else:
+            L = np.linalg.cholesky(Kx + np.eye(n) * sn2)
+            A = np.atleast_2d(np.linalg.solve(L.T, np.linalg.solve(L, y))).T
+            nlZ = np.dot(y.T, A) / 2 + np.log(L.diagonal()).sum() + n * np.log(2 * np.pi) / 2
+            Q = np.linalg.solve(L.T, np.linalg.solve(L, np.eye(n))) - np.dot(A, A.T)
+
+        if grad:
+            dnlZ = np.zeros(len(hypers))
+            for theta in range(len(hypers)):
+                if theta < (len(hypers) - 2):
+                    dnlZ[theta] = (Q * dK[theta, :, :]).sum() / 2
+                elif theta == (len(hypers) - 2):
+                    dnlZ[theta] = (Q * (2 * Kx)).sum() / 2
+                elif theta == (len(hypers) - 1):
+                    dnlZ[theta] = sn2 * np.trace(Q)
+    except np.linalg.LinAlgError as e:
+        nlZ = np.inf;
+        dnlZ = np.ones(len(hypers)) * np.inf
+
+    if grad:
+        return nlZ, dnlZ
+    else:
+        return nlZ
+
 def split_data2(sat, xFB, yFB, *args):
     # TODO: add a docstring
     # NOTE: the order of the values here is not the same a previous implementation
