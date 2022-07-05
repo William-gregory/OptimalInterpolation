@@ -14,6 +14,9 @@ import re
 import os
 import shutil
 
+import cartopy.crs as ccrs
+import cartopy.feature as cfeat
+
 def grid_proj(lon_0=0, boundinglat=60, llcrnrlon=False,
               llcrnrlat=False, urcrnrlon=False, urcrnrlat=False):
 
@@ -460,6 +463,14 @@ def WGS84toEASE2_New(lon, lat):
     return x, y
 
 
+def EASE2toWGS84_New(x, y):
+    EASE2 = "+proj=laea +lon_0=0 +lat_0=90 +x_0=0 +y_0=0 +ellps=WGS84 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"
+    WGS84 = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
+    transformer = Transformer.from_crs(EASE2, WGS84)
+    lon, lat = transformer.transform(x, y)
+    return lon, lat
+
+
 def move_to_archive(top_dir, file_names=None, suffix="", verbose=False):
     """
     Move file(s) matching a pattern to an 'archive' directory, adding suffixes if specified
@@ -510,6 +521,35 @@ def move_to_archive(top_dir, file_names=None, suffix="", verbose=False):
         else:
             print(f"{fn} not found")
 
+
+
+
+def plot_pcolormesh(ax,  lon, lat, plot_data,
+                    fig=None,
+                    title=None,
+                    vmin=None,
+                    vmax=None,
+                    cmap='YlGnBu_r',
+                    cbar_label=None):
+    # ax = axs[j]
+    ax.coastlines(resolution='50m', color='white')
+    ax.add_feature(cfeat.LAKES, color='white', alpha=.5)
+    ax.add_feature(cfeat.LAND, color=(0.8, 0.8, 0.8))
+    ax.set_extent([-180, 180, 60, 90], ccrs.PlateCarree())  # lon_min,lon_max,lat_min,lat_max
+
+    if title:
+        ax.set_title(title)
+    s = ax.pcolormesh(lon, lat, plot_data,
+                      cmap=cmap,
+                      vmin=vmin, vmax=vmax,
+                      transform=ccrs.PlateCarree(),
+                      linewidth=0,
+                      rasterized=True)
+    if fig is not None:
+        cbar = fig.colorbar(s, ax=ax, orientation='horizontal', pad=0.03, fraction=0.03)
+        if cbar_label:
+            cbar.set_label(cbar_label, fontsize=14)
+        cbar.ax.tick_params(labelsize=14)
 
 if __name__ == "__main__":
 
