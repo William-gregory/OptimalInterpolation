@@ -9,7 +9,7 @@ from functools import reduce
 
 from scipy.interpolate import interp2d, griddata
 
-from OptimalInterpolation.utils import readFB, split_data2, grid_proj, WGS84toEASE2_New
+from OptimalInterpolation.utils import readFB, split_data2, grid_proj, WGS84toEASE2_New, EASE2toWGS84_New
 from OptimalInterpolation import get_data_path
 
 
@@ -164,7 +164,9 @@ class DataLoader():
                       aux_data_dir=None,
                       grid_res=None,
                       season=None,
-                      load_sie=True):
+                      load_sie=True,
+                      get_new=False,
+                      get_bin_center=True):
         # TODO: set a default dir
 
         assert season is not None, f"season not provided, please provided"
@@ -186,13 +188,42 @@ class DataLoader():
         if self.verbose:
             print("reading 'aux' data")
         prefix_list = ["lon", "lat", "x", "y"]
-        self.aux = {p: np.load(os.path.join(aux_data_dir, f"{p}_{grid_res}.npy"))
+        pre_prefix = "new_" if get_new else ""
+        self.aux = {p: np.load(os.path.join(aux_data_dir, f"{pre_prefix}{p}_{grid_res}.npy"))
                     for p in prefix_list}
+
+        if get_bin_center:
+            assert not get_new, f"get_bin_center is :{get_bin_center} but so is get_new: {get_new}, " \
+                                f"which expects to read centered data"
+            self.aux = self.move_to_bin_center_get_lon_lat(self.aux['x'], self.aux['y'])
 
         if load_sie:
             self.load_sie_data(sie_data_dir=os.path.join(aux_data_dir, "SIE"),
                                grid_res=grid_res,
                                season=season)
+
+    @classmethod
+    def move_to_bin_center_get_lon_lat(self, x, y):
+        xnew = self.center_of_grid(x)
+        ynew = self.center_of_grid(y)
+
+        lon, lat = EASE2toWGS84_New(x,y)
+        out = {
+            "lon": lon,
+            "lat": lat,
+            "x": xnew,
+            "y": ynew
+        }
+        return out
+
+    @staticmethod
+    def center_of_grid(z):
+        # given a 2-d array representing values on corners of grid
+        # get the values in the center of grid
+        # - should be equivalent to bilinear interpolation on an even spaces grid
+        _ = z[:, :-1] + np.diff(z, axis=1) / 2
+        out = _[:-1, :] + np.diff(_, axis=0) / 2
+        return out
 
     def load_sie_data(self,
                       sie_data_dir=None,
@@ -263,8 +294,8 @@ class DataLoader():
 
         # get x,y dimension values, if possible
         try:
-            x = self.aux['x'][0, :-1]
-            y = self.aux['y'][:-1, 0]
+            x = self.aux['x'][0, :out.shape[1]]
+            y = self.aux['y'][:out.shape[0], 0]
         except Exception as e:
             x = np.arange(out.shape[1])
             y = np.arange(out.shape[0])
