@@ -1,0 +1,8 @@
+{
+  "comment": [
+    "json config file can be used to variable / parameters",
+    "specific to local environment. Separate files should be used to this one,",
+    "and those files should not be version controlled. The below entries are just examples"
+  ],
+  "gdrive": "/path/to/locally/mounted/gdrive"
+}
