@@ -107,6 +107,7 @@ def GPR(x, y, xs, ell, sf2, sn2, mean, approx=False, M=None, returnprior=False):
         Ki, A = Nystroem(x, y, M=M, ell=ell, sf2=sf2, sn2=sn2)
         err = mdot([Kxsx.T, Ki, Kxsx])
     else:
+        # this algo follows Algo 2.1 in Rasmussen (2006)
         Kx = SGPkernel(x, ell=ell, sigma=sf2) + np.eye(n) * sn2
         L = np.linalg.cholesky(Kx)
         A = np.linalg.solve(L.T, np.linalg.solve(L, y))
@@ -114,9 +115,11 @@ def GPR(x, y, xs, ell, sf2, sn2, mean, approx=False, M=None, returnprior=False):
         err = np.dot(v.T, v)
 
     fs = mean + np.dot(Kxsx.T, A)
+    # taking the square root makes it standard deviation
+    # TODO: update doc string
     sfs2 = np.sqrt((Kxs - err).diagonal())
     if returnprior:
-        return fs, sfs2, np.sqrt(Kxs[0][0])
+        return fs, sfs2, np.sqrt(Kxs.diagonal()) # np.sqrt(Kxs[0][0])
     else:
         return fs, sfs2
 

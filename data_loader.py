@@ -84,10 +84,13 @@ class DataLoader():
                       sat_data_dir=None,
                       sat_list=None,
                       season="2018-2019",
-                      grid_res="25km",
+                      grid_res=None,
                       combine_all=True,
                       common_dates=True):
         # TODO: only allow for one season at a time
+
+        # get the grid_res to use
+        grid_res = self.grid_res if grid_res is None else grid_res
 
         if sat_data_dir is None:
             # HARDCODED: path for data
@@ -261,7 +264,7 @@ class DataLoader():
     @staticmethod
     def data_select(date, dates, obs, xFB, yFB, days_ahead=4, days_behind=4):
         # for a given date select
-        print("selecting data")
+        # print("selecting data")
 
         # find day location based on given date value
         day = np.where(np.in1d(dates, date))[0][0]
