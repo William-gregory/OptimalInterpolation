@@ -9,6 +9,7 @@ import pickle
 import pyproj as proj
 
 from datetime import datetime as dt
+import datetime
 import subprocess
 import re
 import os
@@ -393,7 +394,7 @@ def load_data(datapath, grid_res, season,
     xFB, yFB = mplot(lon, lat)
 
     if dates_to_datetime:
-        dates = np.array([dt.strptime(d, "%Y%m%d") for d in dates], dtype="datetime64[D]")
+        dates = np.array([datetime.strptime(d, "%Y%m%d") for d in dates], dtype="datetime64[D]")
     else:
         dates = np.array(dates)
 
@@ -553,6 +554,8 @@ def plot_pcolormesh(ax,  lon, lat, plot_data,
         if cbar_label:
             cbar.set_label(cbar_label, fontsize=14)
         cbar.ax.tick_params(labelsize=14)
+
+
 
 if __name__ == "__main__":
 
