@@ -15,8 +15,6 @@ import re
 import os
 import shutil
 
-import cartopy.crs as ccrs
-import cartopy.feature as cfeat
 
 def grid_proj(lon_0=0, boundinglat=60, llcrnrlon=False,
               llcrnrlat=False, urcrnrlon=False, urcrnrlat=False):
@@ -535,6 +533,9 @@ def plot_pcolormesh(ax,  lon, lat, plot_data,
                     vmax=None,
                     cmap='YlGnBu_r',
                     cbar_label=None):
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeat
+
     # ax = axs[j]
     ax.coastlines(resolution='50m', color='white')
     ax.add_feature(cfeat.LAKES, color='white', alpha=.5)
