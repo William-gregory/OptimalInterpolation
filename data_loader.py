@@ -9,6 +9,7 @@ from functools import reduce
 
 from scipy.interpolate import interp2d, griddata
 
+from OptimalInterpolation.data_dict import DataDict
 from OptimalInterpolation.utils import readFB, split_data2, grid_proj, WGS84toEASE2_New, EASE2toWGS84_New
 from OptimalInterpolation import get_data_path
 
@@ -85,6 +86,7 @@ class DataLoader():
                       sat_list=None,
                       season="2018-2019",
                       grid_res=None,
+                      make_obs=True,
                       combine_all=True,
                       common_dates=True):
         # TODO: only allow for one season at a time
@@ -113,61 +115,81 @@ class DataLoader():
 
             with open(pkl_full, "rb") as f:
                 _ = pickle.load(f)
+            # TODO: want to ensure dates are in sorted order
+            _ = self._concat_dict_date_data(_)
+            sats[s] = DataDict(vals=_['data'], dims=_["dims"], name=s)
 
-            sats[s] = self._concat_dict_date_data(_)
+        self.sats = sats
 
-        # ---
-        # date alignment
-        # ---
+        # {k: len(v.dims['date']) for k,v in self.sats.items()}
+        # int_dims = DataDict.dims_intersection(*[v.dims for k,v in self.sats.items()])
 
-        # TODO: allow for all dates to be returned, wont be able concatenate
-        # take only the intersection
-
-        if common_dates:
-            sat_dates = {k: v['dims']['date'] for k, v in sats.items()}
-
-            common_dates = reduce(lambda x, y: np.intersect1d(x, y),
-                                  [v for v in sat_dates.values()])
-
-            if self.verbose:
-                print(f"found: {len(common_dates)} common_dates in the data, will use only these dates")
-                if self.verbose > 1:
-                    for k, v in sats.items():
-                        print(f"{k}: {len(v['dims']['date'])}")
-
-            # for each dataset only take the dates which are common
-            for k in sats.keys():
-                v = sats[k]
-                date_bool = np.in1d(v['dims']['date'], common_dates)
-                v['data'] = v['data'][..., date_bool]
-                v['dims']['date'] = v['dims']['date'][date_bool]
+        self.obs = DataDict.concatenate(*[v for v in sats.values()],
+                                        dim_name="sat",
+                                        name="obs")
 
 
-        if combine_all:
-            sat_dim = np.array(list(sats))
-            # concatenate data
-            tmp = np.concatenate([v['data'][..., None]
-                                  for k, v in sats.items()], axis=-1)
-
-            # just to be consistent with previous layout, will swap axis
-            tmp = tmp.swapaxes(2, 3)
-
-            dims = {
-                'y': sats[sat_dim[0]]['dims']['y'],
-                'x': sats[sat_dim[0]]['dims']['x'],
-                'sat': sat_dim,
-                'date': sats[sat_dim[0]]['dims']['date']
-            }
-
-            self.obs = {"data": tmp, "dims": dims}
-        else:
-            self.obs = sats
+        # # ---
+        # # date alignment
+        # # ---
+        #
+        # # TODO: allow for all dates to be returned, wont be able concatenate
+        # # TODO: review this, getting the common dates does not seem needed
+        # # take only the intersection
+        #
+        # if common_dates:
+        #     sat_dates = {k: v.dims['date'] for k, v in sats.items()}
+        #
+        #     common_dates = reduce(lambda x, y: np.intersect1d(x, y),
+        #                           [v for v in sat_dates.values()])
+        #
+        #     if self.verbose:
+        #         print(f"found: {len(common_dates)} common_dates in the data, will use only these dates")
+        #         if self.verbose > 1:
+        #             for k, v in sats.items():
+        #                 print(f"{k}: {len(v.dims['date'])}")
+        #
+        #     # for each dataset only take the dates which are common
+        #     for k in sats.keys():
+        #
+        #         sats[k].subset(select_dims={"date": common_dates}, inplace=True)
+        #         # v = sats[k]
+        #         # date_bool = np.in1d(v.dims['date'], common_dates)
+        #         # v['data'] = v['data'][..., date_bool]
+        #         # v['dims']['date'] = v['dims']['date'][date_bool]
+        #
+        #
+        # if combine_all:
+        #     # sat_dim = np.array(list(sats))
+        #     # concatenate data
+        #     obs = DataDict.concatenate(*[v for v in sats.values()],
+        #                                dim_name="sat",
+        #                                name="obs")
+        #     # tmp = np.concatenate([v[..., None]
+        #     #                       for k, v in sats.items()], axis=-1)
+        #     #
+        #     #
+        #     #
+        #     # # just to be consistent with previous layout, will swap axis
+        #     # tmp = tmp.swapaxes(2, 3)
+        #     #
+        #     # dims = {
+        #     #     'y': sats[sat_dim[0]]['dims']['y'],
+        #     #     'x': sats[sat_dim[0]]['dims']['x'],
+        #     #     'sat': sat_dim,
+        #     #     'date': sats[sat_dim[0]]['dims']['date']
+        #     # }
+        #
+        #     self.obs = obs
+        # else:
+        #     self.obs = sats
 
     def load_aux_data(self,
                       aux_data_dir=None,
                       grid_res=None,
                       season=None,
                       load_sie=True,
+                      load_fyi=True,
                       get_new=False,
                       get_bin_center=True):
         # TODO: set a default dir
@@ -194,28 +216,80 @@ class DataLoader():
         pre_prefix = "new_" if get_new else ""
         self.aux = {p: np.load(os.path.join(aux_data_dir, f"{pre_prefix}{p}_{grid_res}.npy"))
                     for p in prefix_list}
+        self.aux = {k: DataDict(vals=v)
+                    for k, v in self.aux.items()}
 
         if get_bin_center:
             assert not get_new, f"get_bin_center is :{get_bin_center} but so is get_new: {get_new}, " \
                                 f"which expects to read centered data"
-            self.aux = self.move_to_bin_center_get_lon_lat(self.aux['x'], self.aux['y'])
+            self.aux = self.move_to_bin_center_get_lon_lat(self.aux['x'].vals,
+                                                           self.aux['y'].vals)
 
         if load_sie:
             self.load_sie_data(sie_data_dir=os.path.join(aux_data_dir, "SIE"),
                                grid_res=grid_res,
                                season=season)
 
+        if load_fyi:
+            self._read_fyi(aux_data_dir, grid_res)
+
+
+    def load_data(self,
+                  aux_data_dir=None,
+                  sat_data_dir=None,
+                  sat_list=None,
+                  grid_res=None,
+                  season=None,
+                  **kwargs):
+
+
+
+        self.load_aux_data(aux_data_dir=aux_data_dir,
+                           season=season,
+                           grid_res=grid_res,
+                           load_sie=True,
+                           load_fyi=True,
+                           **kwargs)
+
+        self.load_obs_data(sat_data_dir=sat_data_dir,
+                           sat_list=sat_list,
+                           season=season,
+                           grid_res=grid_res)
+
+
+
+
+    def _read_fyi(self, aux_data_dir, grid_res):
+
+        if self.verbose:
+            print("reading CS2_FYI data")
+        if str(grid_res):
+            grid_res = int(re.sub("km", "", grid_res))
+
+        # TODO: deal with FYI being 181x181 (for 50)
+        # - why is that the case
+        cs2_FYI = np.load(
+            os.path.join(aux_data_dir,
+                         f'CS2_{grid_res}km_FYI_20181101-20190428.npy'))
+
+        # create an array of dates
+        cs2_FYI_dates = np.arange(np.datetime64("2018-11-01"), np.datetime64("2019-04-29"))
+        cs2_FYI_dates = np.array([re.sub("-", "", i) for i in cs2_FYI_dates.astype(str)])
+
+        self.fyi = DataDict(cs2_FYI)
+        self.fyi.set_dim_idx(dim_idx="idx2", new_idx="date", dim_vals=cs2_FYI_dates)
+
     @classmethod
     def move_to_bin_center_get_lon_lat(self, x, y):
         xnew = self.center_of_grid(x)
         ynew = self.center_of_grid(y)
 
-        lon, lat = EASE2toWGS84_New(x,y)
+        lon, lat = EASE2toWGS84_New(xnew, ynew)
         out = {
-            "lon": lon,
-            "lat": lat,
-            "x": xnew,
-            "y": ynew
+            "lon": DataDict(lon),
+            "lat": DataDict(lat),
+            "x": DataDict(xnew),
+            "y": DataDict(ynew)
         }
         return out
 
@@ -249,7 +323,8 @@ class DataLoader():
             print("reading 'sie' data")
         with open(os.path.join(sie_data_dir, f"SIE_masking_{grid_res}_{season}_season.pkl"), "rb") as f:
             _ = pickle.load(f)
-        self.sie = self._concat_dict_date_data(_)
+        _ = self._concat_dict_date_data(_)
+        self.sie = DataDict(vals=_['data'], dims=_['dims'], name="sie")
 
     @staticmethod
     def coarse_grid(grid_space, grid_space_offset=0, x_size=320, y_size=320):
@@ -297,9 +372,12 @@ class DataLoader():
 
         # get x,y dimension values, if possible
         try:
-            x = self.aux['x'][0, :out.shape[1]]
-            y = self.aux['y'][:out.shape[0], 0]
+            x = self.aux['x'].vals[0, :out.shape[1]]
+            y = self.aux['y'].vals[:out.shape[0], 0]
         except Exception as e:
+            if self.verbose:
+                print("issue getting x,y values from aux data")
+                print(e)
             x = np.arange(out.shape[1])
             y = np.arange(out.shape[0])
 
