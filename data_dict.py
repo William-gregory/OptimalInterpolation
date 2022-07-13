@@ -284,22 +284,23 @@ class DataDict(dict):
 
         return equal_dims
 
-    def equal(self, d, verbose=False):
+    def equal(self, other, verbose=False):
         """compare DataDict object to see if equal"""
         # TODO: here should check class
         # if not d.name == self.name:
-        if not self.flat == d.flat:
+        if not self.flat == other.flat:
             if verbose:
-                print(f"flat values: {self.flat} vs {d.flat}")
+                print(f"flat values: {self.flat} vs {other.flat}")
             return False
 
-        if not self.dims == d.dims:
+        # if not self.dims == d.dims:
+        if not self.dims_equal(self.dims, other.dims):
             if verbose:
                 print("dims not equal")
             return False
 
         # TODO: allow for almost equal?
-        if not np.array_equal(self.vals, d.vals):
+        if not np.array_equal(self.vals, other.vals):
             if verbose:
                 print("values not equal")
             return False
@@ -329,26 +330,9 @@ class DataDict(dict):
             # idx will allow for selecting values in an array
             # locs is a dict of dimensions being selected
             idx, locs = self._index_loc_from_select_dims(select_dims)
-            # get the matching locations
-            # locs = {}
-            # for k in self.dims.keys():
-            #     # if key is not in select take entire dimension
-            #     if k not in select_dims:
-            #         locs[k] = np.arange(len(self.dims[k]))
-            #     else:
-            #         if self.flat:
-            #             locs[k] = np.in1d(self.dims[k], select_dims[k])
-            #         else:
-            #             # TODO: is match needed here?
-            #             locs[k] = match(select_dims[k], self.dims[k])
 
             # get subset of vals and dims
             if self.flat:
-                # combine locations to select from each dimension using & operator
-                # _ = reduce(lambda x,y: x & y, [v for k, v in locs.items()]).astype(bool)
-                # vals = self.vals[_]
-                # dims = {k: v[_] for k, v in self.dims.items()}
-
                 vals = self.vals[idx]
                 dims = {k: v[idx] for k, v in self.dims.items()}
             else:
@@ -381,6 +365,7 @@ class DataDict(dict):
                     dims[k] = dims[k][true_loc[kidx]]
 
             if inplace:
+                # TODO: here store original dims
                 self.vals = vals
                 self.dims = dims
                 self.flat = True
@@ -404,14 +389,65 @@ class DataDict(dict):
                 dims[k] = dims[k][true_loc[kidx]]
 
             if inplace:
+                # original dims
+                self._org_dims = self.dims.copy()
                 self.dims = dims
                 self.vals = vals
                 self.flat = True
             else:
-                return DataDict(vals=vals, dims=dims, name=self.name, is_flat=True)
+                _ = DataDict(vals=vals, dims=dims, name=self.name, is_flat=True)
+                # TODO: change how this attribute is set
+                _._org_dims = self.dims.copy()
+                return _
         # otherwise already flat
         else:
             print("already flat")
+            # do nothing (return None) if inplace
+            if inplace:
+                return None
+            # otherwise make a copy
+            else:
+                return self.copy()
+
+    def unflatten(self, inplace=False, fill_val=np.nan, udims=None, verbose=False):
+
+        if self.flat:
+            # for each dimension get the unique values
+            if udims is None:
+                udims = {k: np.unique(v) for k, v in self.dims.items()}
+                # if has a _org_dims attribute, re-order udims values
+                if hasattr(self, "_org_dims"):
+                    udims = {k:  v[np.argsort(match(v, self._org_dims[k]))]
+                             for k, v in udims.items()}
+            # if unique dims has been provided use those
+            else:
+                assert isinstance(udims, dict), f"udims provided by needs to be dict"
+                for k in self.dims.keys():
+                    assert k in udims, f"key: {k} in dims is not in provided udims"
+                if verbose:
+                    print("using provided unique dims (udims), with sizes:")
+                    udims_shape = {k: len(v) for k,v in udims.items()}
+                    print(udims_shape)
+            # get the shape from num. of unique values
+            shape = [len(v) for k, v in udims.items()]
+            # create an nd-array to populate
+            # NOTE: the fill_val and dtype must be compatible, e.g. np.nan and float
+            vals = np.full(shape, fill_val, dtype=self.vals.dtype)
+            # get the locations of the dim values in unique positions
+            locs = [match(v, udims[k]) for k, v in self.dims.items()]
+            # fill nd-array at correct locations
+            vals[tuple(locs)] = self.vals
+            if inplace:
+                self.dims = udims
+                self.vals = vals
+                self.flat = False
+            else:
+                return DataDict(vals=vals, dims=udims, name=self.name, is_flat=False)
+
+
+        # otherwise already flat
+        else:
+            print("already not flat")
             # do nothing (return None) if inplace
             if inplace:
                 return None
@@ -510,6 +546,12 @@ if __name__ == "__main__":
     dflat = d.flatten(inplace=False)
 
     print(f"flatten data is equal: {d.equal(dflat, verbose=True)}")
+
+    # unflatten
+    duflat = dflat.unflatten()
+
+    # unflattening a previously flattened DataDict should give the same result
+    assert duflat.equal(d)
 
     # ---
     # subset
