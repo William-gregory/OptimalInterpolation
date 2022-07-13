@@ -1,6 +1,7 @@
 # DataLoader Class
 
 import numpy as np
+import pandas as pd
 import os
 import re
 import pickle
@@ -530,6 +531,120 @@ class DataLoader():
         }
 
         return out
+
+
+    def read_results(self,
+                     results_dir,
+                     file="results.csv",
+                     date_cols=None,
+                     attr_cols=None,
+                     grid_res_loc=None,
+                     unflatten=True):
+        if self.verbose:
+            print(f"reading previously generated outputs from:\n{results_dir}\nfrom files:\n{file}")
+        assert file in ["results.csv", "prediction.csv"], f"file: {file} not valid"
+
+        if date_cols is None:
+            if self.verbose:
+                print("data_cols not provided, getting default values ")
+            if file == "results.csv":
+                data_cols = ['x', 'y', 'lon', 'lat',
+                             'num_inputs', 'optimise_success', "run_time",
+                             "marginal_loglikelihood",
+                             "ls_x", "ls_y", "ls_t",
+                             "kernel_variance", "likelihood_variance",
+                             ]
+            else:
+                # data_cols =['f*', 'f*_var', 'y', 'y_var', 'grid_loc_0', 'grid_loc_1', 'proj_loc_0', 'proj_loc_1',
+                #             'mean', 'date', 'xs_x', 'xs_y', 'xs_t', 'run_time']
+                data_cols = ['f*', 'f*_var', 'y', 'y_var', 'mean',
+                             'xs_x', 'xs_y', 'xs_t', 'run_time']
+
+        assert os.path.exists(results_dir)
+
+        # get the dates in results dir - i.e. the date stamped directories
+        date_dirs = np.sort([i for i in os.listdir(results_dir) if i.isdigit()])
+
+        assert len(date_dirs), f"no date_dirs found in result_dir"
+
+        res_list = []
+
+        if self.verbose:
+            print("reading in previous results")
+
+        for idx, date in enumerate(date_dirs):
+
+            print(date)
+            if file == "results.csv":
+                try:
+                    # results contains attributes / parameters
+                    res = pd.read_csv(os.path.join(results_dir, date, "results.csv"))
+                    res_list.append(res)
+                except FileNotFoundError:
+                    print("results.csv file not found, skipping")
+                    continue
+            else:
+                try:
+                    pred = pd.read_csv(os.path.join(results_dir, date, "prediction.csv"))
+                    # HACK: this shouldn't need to be done, change data at source instead of here
+                    pred.rename(columns={c: c.lstrip() for c in pred.columns}, inplace=True)
+
+                    pred = pred.loc[(pred['grid_loc_0'] == pred['proj_loc_0']) & \
+                                    (pred['grid_loc_1'] == pred['proj_loc_1'])]
+
+                    res_list.append(pred)
+                except FileNotFoundError:
+                    print("prediction.csv file not found, skipping")
+                    continue
+
+        rdf = pd.concat(res_list)
+        rdf['date'] = rdf['date'].astype(str)
+
+        miss_data_cols = np.array(data_cols)[~np.in1d(data_cols, rdf.columns)]
+        assert len(miss_data_cols) == 0, f"data_cols: {miss_data_cols} not in data"
+
+        dim_cols = ["grid_loc_0", "grid_loc_1", "date"]
+        dims = {dc: rdf[dc].values for dc in dim_cols}
+
+        dd = {dc: DataDict(vals=rdf[dc].values, dims=dims, is_flat=True, name=dc)
+              for dc in data_cols}
+
+        # unflatten data - put into cube
+        if unflatten:
+
+            udims = {k: np.sort(np.unique(v)) for k, v in dims.items()}
+
+            # HACK: make grid locations align with data
+            if grid_res_loc:
+                if self.verbose:
+                    print(f"grid_res_loc: {grid_res_loc} provided will hard coded grid_loc_# values")
+                udims['grid_loc_0'] = np.arange(360) if grid_res_loc == 25 else np.arange(180)
+                udims['grid_loc_1'] = np.arange(360) if grid_res_loc == 25 else np.arange(180)
+
+            for k in dd.keys():
+                dd[k] = dd[k].unflatten(udims=udims)
+
+        if attr_cols is None:
+            if self.verbose:
+                print("using default attr_cols")
+            if file == "results.csv":
+                attr_cols = ["scale_x", "scale_y", "scale_t", "scale_output"]
+            else:
+                attr_cols = []
+
+        attr_vals = {}
+        for ac in attr_cols:
+            _ = rdf[ac].unique()
+            assert len(_) == 1, f"got multiple values for attribute column: {ac}"
+            attr_vals[ac] = _[0]
+
+        # TODO: add attributes to just the relevant DataDicts (?)
+        # add attributes
+        for k, v in attr_vals.items():
+            for kk in dd.keys():
+                dd[kk][k] = v
+
+        return dd
 
 
 if __name__ == "__main__":
