@@ -5,6 +5,7 @@ from functools import reduce
 import numpy as np
 import pandas as pd
 import datetime
+import warnings
 
 
 def to_array(*args, date_format="%Y-%m-%d"):
@@ -508,8 +509,27 @@ class DataDict(dict):
     def not_nan(self, inplace=False):
         return self.subset(select_array=~np.isnan(self.vals), inplace=inplace)
 
+    def to_dataframe(self):
+        """convert to pandas DataFrame"""
+
+        if self.flat:
+            midx = pd.MultiIndex.from_arrays([v for v in self.dims.values()],
+                                           names=[k for k in self.dims.keys()])
+            df = pd.DataFrame(self.vals, index=midx, columns=[self.name])
+        else:
+            midx = pd.MultiIndex.from_product([v for v in self.dims.values()],
+                                              names=[k for k in self.dims.keys()])
+            df = pd.DataFrame(self.vals.flatten(), index=midx, columns=[self.name])
+
+        return df
+
+    def from_dataframe(self):
+        """make DataDict from a DataFrame"""
+        warnings.warn("from_dataframe not implemented")
 
 if __name__ == "__main__":
+
+
     # --
     # input parameters
     # --
@@ -552,6 +572,15 @@ if __name__ == "__main__":
 
     # unflattening a previously flattened DataDict should give the same result
     assert duflat.equal(d)
+
+    # ---
+    # convert to pd.DataFrame
+    # ---
+
+    df0 = d.to_dataframe()
+    df1 = dflat.to_dataframe()
+
+    assert df0.equals(df1), f"DataFrames from flat and not flat object expected to be equal"
 
     # ---
     # subset
