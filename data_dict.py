@@ -133,6 +133,7 @@ class DataDict(dict):
 
     @staticmethod
     def _reshape_and_move(vals, dims, new_dims):
+        """reshape axis and add """
         new_keys = list(new_dims.keys())
         cur_keys = list(dims.keys())
 
@@ -170,6 +171,7 @@ class DataDict(dict):
         vals = self._reshape_and_move(self.vals, self.dims, new_dims) + \
                self._reshape_and_move(other.vals, other.dims, new_dims)
 
+        # TODO: consider applying a name here?
         return DataDict(vals=vals, dims=new_dims)
 
     def __sub__(self, other):
@@ -456,6 +458,25 @@ class DataDict(dict):
             else:
                 return self.copy()
 
+    def movedims(self, src, dst):
+        """wrapper for move axis, use dimension values instead"""
+        src, dst = to_array(src, dst)
+        assert len(src) == len(dst)
+
+        source = match(src, list(self.dims.keys()))
+        self.moveaxis(source, dst)
+
+
+    def moveaxis(self, source, destination):
+        source, destination = to_array(source, destination)
+        order = [n for n in range(self.vals.ndim) if n not in source]
+
+        for dest, src in sorted(zip(destination, source)):
+            order.insert(dest, src)
+        new_key_ord = np.array(list(self.dims.keys()))[order]
+        self.vals = np.moveaxis(self.vals, source, destination)
+        self.dims = {k: self.dims[k] for k in new_key_ord}
+
     @classmethod
     def dims_intersection(cls, *dims):
         """get the intersection of the dimension valaues (for each dimension)
@@ -558,6 +579,18 @@ if __name__ == "__main__":
     d2 = d.copy(new_name="new_data")
 
     print(f"copy data object is equal: {d.equal(d2, verbose=False)}")
+
+    # --
+    # move axis (and dimensions)
+    # --
+
+    dm = d.copy()
+    dm.moveaxis(0, 2)
+    assert np.array_equal(dm.vals, np.moveaxis(d.vals, 0, 2))
+
+    # move dimensions
+    dm = d.copy()
+    dm.movedims('x', 2)
 
     # ---
     # flatten data
