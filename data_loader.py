@@ -460,7 +460,7 @@ class DataLoader():
 
         # read data in
         if self.verbose:
-            print("reading in data")
+            print("reading in previously generated (legacy) interpolation results data")
         for sd in sort_dates:
             if self.verbose > 2:
                 print(sd)
@@ -484,6 +484,12 @@ class DataLoader():
             "x": np.arange(0, 8e6, 5e4),
             "date": sort_dates
         }
+
+        # convert to DataDict
+        for k in res.keys():
+            if k == 'dims':
+                continue
+            res[k] = DataDict(vals=res[k], dims=res['dims'], name=k)
 
         return res
 
@@ -529,11 +535,14 @@ class DataLoader():
             kdata = res[k]
 
             # create an array to populate with values
-            out[k] = np.full(xnew.shape + (kdata.shape[-1],), np.nan)
+            out[k] = np.full(xnew.shape + (kdata.vals.shape[-1],), np.nan)
 
-            for id in range(kdata.shape[-1]):
+            # for id in range(kdata.shape[-1]):
+            for id, date in enumerate(kdata.dims['date']):
 
-                data = kdata[..., id]
+                # data = kdata[..., id]
+                data = kdata.subset(select_dims={"date": date})
+                data = np.squeeze(data.vals)
 
                 # identify the missing / nan points, just to exclude those
                 has_val = ~np.isnan(data)
@@ -556,6 +565,12 @@ class DataLoader():
             "x": xnew[0, :],
             "date": res['dims']['date']
         }
+
+        # convert to DataDict
+        for k in out.keys():
+            if k == "dims":
+                continue
+            out[k] = DataDict(vals=out[k], dims=out['dims'], name=k)
 
         return out
 
