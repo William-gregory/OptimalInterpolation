@@ -9,7 +9,7 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 
 from OptimalInterpolation import get_data_path
-from OptimalInterpolation.data_dict import DataDict, match
+from OptimalInterpolation.data_dict import DataDict, match, to_array
 from OptimalInterpolation.data_loader import DataLoader
 from OptimalInterpolation.utils import WGS84toEASE2_New, \
     EASE2toWGS84_New, SMLII_mod, SGPkernel, GPR
@@ -62,6 +62,9 @@ class PurePythonGPR():
     def get_loglikelihood(self):
         kv = np.array([self.kernel_var]) if isinstance(self.kernel_var, (float, int)) else self.kernel_var
         lv = np.array([self.likeli_var]) if isinstance(self.likeli_var, (float, int)) else self.likeli_var
+
+        kv = kv.reshape(1) if len(kv.shape) == 0 else kv
+        lv = lv.reshape(1) if len(lv.shape) == 0 else lv
 
         hypers = np.concatenate([self.length_scales, kv, lv])
 
@@ -244,6 +247,7 @@ class SeaIceFreeboard(DataLoader):
             if self.verbose:
                 print("converting provided (lon,lat) values to (x,y)")
             x, y = WGS84toEASE2_New(lon, lat)
+        x, y = to_array(x, y)
 
         return x, y
 
@@ -259,7 +263,7 @@ class SeaIceFreeboard(DataLoader):
         x, y = self._check_xy_lon_lat(x, y, lon, lat)
 
         # get the points from the input data within radius
-        ID = self.X_tree.query_ball_point(x=[x, y],
+        ID = self.X_tree.query_ball_point(x=[x[0], y[0]],
                                           r=incl_rad * 1000)
 
         # get inputs and outputs for this location
@@ -329,6 +333,33 @@ class SeaIceFreeboard(DataLoader):
 
         return out
 
+    def select_data_for_given_date(self,
+                                   date,
+                                   days_ahead,
+                                   days_behind,
+                                   hold_out=None,
+                                   prior_mean_method="fyi_average",
+                                   min_sie=None):
+
+        # select data for a given date (include some days ahead / behind)
+        self.select_obs_date(date,
+                             days_ahead=days_ahead,
+                             days_behind=days_behind)
+
+        # set values on date for hold_out (satellites) to nan
+        self.remove_hold_out_obs_date(hold_out=hold_out)
+
+        # calculate the mean for values obs
+        self.prior_mean(date,
+                        method=prior_mean_method)
+
+        # de-mean the observation (used for the calculation on the given date)
+        self.demean_obs_date()
+
+        # build KD-tree
+        self.build_kd_tree(min_sie=min_sie)
+
+
 
     def select_data_for_date_location(self, date,
                                       obs=None,
@@ -378,6 +409,7 @@ class SeaIceFreeboard(DataLoader):
 
         return inputs, outputs
 
+
     def build_gpr(self,
                   inputs,
                   outputs,
@@ -425,8 +457,9 @@ class SeaIceFreeboard(DataLoader):
         if scale_inputs is None:
             scale_inputs = np.ones(self.x.shape[1])
 
-        scale_inputs = self._float_list_to_array(scale_inputs)
+        # scale_inputs = self._float_list_to_array(scale_inputs)
         # scale_inputs = np.array(scale_inputs) if isinstance(scale_inputs, list) else scale_inputs
+        scale_inputs, = to_array(scale_inputs)
         assert len(scale_inputs) == self.x.shape[1], \
             f"scale_inputs did not match expected length: {self.x.shape[1]}"
 
@@ -754,8 +787,9 @@ class SeaIceFreeboard(DataLoader):
         return out
 
     def _predict_pure_python(self, xs, **kwargs):
-
-        return self.model.predict(xs, mean=self.mean, **kwargs)
+        # NOTE: is it expected the data (self.y) has been de-meaned already
+        # adding the mean back should happen else where
+        return self.model.predict(xs, mean=0, **kwargs)
 
 
     def _float_list_to_array(self, x):
@@ -877,6 +911,7 @@ class SeaIceFreeboard(DataLoader):
         wrapper function to run optimal interpolation of sea ice freeboard for a given date
         """
 
+        # TODO: SeaIceFreeboard run methods needs to be completed
         if load_data:
             # can load data via inherited DataLoader methods
             aux_data_dir = aux_data_dir if aux_data_dir is not None else get_data_path("aux")
@@ -1055,7 +1090,8 @@ if __name__ == "__main__":
     # initialise SeaIceFreeboard class
     # --
 
-    sifb = SeaIceFreeboard(grid_res=f"{grid_res}km")
+    sifb = SeaIceFreeboard(grid_res=f"{grid_res}km",
+                           length_scale_name=['x', 'y', 't'])
 
     # ---
     # read / load data
@@ -1072,24 +1108,17 @@ if __name__ == "__main__":
     # TODO: create a method to select_inputs_outputs_from_date_location
     #  - and wrap the following lines up
 
-    # select data for a given date (include some days ahead / behind)
-    sifb.select_obs_date(date,
-                         days_ahead=days_ahead,
-                         days_behind=days_behind)
-
-    # calculate the mean for values obs
-    sifb.prior_mean(date,
-                    method="fyi_average")
-
-    # de-mean the observation (used for the calculation on the given date)
-    sifb.demean_obs_date()
-
-    # build KD-tree
-    sifb.build_kd_tree()
+    sifb.select_data_for_given_date(date=date,
+                                    days_ahead=days_ahead,
+                                    days_behind=days_behind,
+                                    hold_out=None,
+                                    prior_mean_method="fyi_average",
+                                    min_sie=None)
 
     # select inputs for a given location
     inputs, outputs = sifb.select_input_output_from_obs_date(lon=lon,
-                                                             lat=lat)
+                                                             lat=lat,
+                                                             incl_rad=incl_rad)
 
     # ---
     # build GPR mode, optimise and predict
