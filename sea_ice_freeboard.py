@@ -3,6 +3,7 @@ import re
 import gpflow
 import numpy as np
 import scipy
+import warnings
 
 import tensorflow as tf
 import tensorflow_probability as tfp
@@ -199,7 +200,12 @@ class SeaIceFreeboard(DataLoader):
     def demean_obs_date(self):
         """subtract mean from obs"""
         # TODO: add a __sub__, __add__ methods to DataDict
-        self.obs_date.vals -= self.mean.vals[..., None, None]
+        # HACK:
+        if self.obs_date.vals.shape[:2] == self.mean.vals.shape[:2]:
+            self.obs_date.vals -= self.mean.vals[..., None, None]
+        else:
+            warnings.warn("mean shape did not align with obs_date, will subtract nan mean")
+            self.obs_date.vals -= np.nanmean(self.mean.vals)
         self.obs_date['de-mean'] = True
 
     def build_kd_tree(self, min_sie=None):

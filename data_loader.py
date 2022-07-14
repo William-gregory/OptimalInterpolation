@@ -5,6 +5,7 @@ import pandas as pd
 import os
 import re
 import pickle
+import warnings
 
 from functools import reduce
 
@@ -87,6 +88,7 @@ class DataLoader():
                       sat_list=None,
                       season="2018-2019",
                       grid_res=None,
+                      take_dim_intersect=True,
                       make_obs=True,
                       combine_all=True,
                       common_dates=True):
@@ -120,15 +122,23 @@ class DataLoader():
             _ = self._concat_dict_date_data(_)
             sats[s] = DataDict(vals=_['data'], dims=_["dims"], name=s)
 
+        # take intersection of dates
+        if take_dim_intersect:
+            # warnings.warn("for satellite data taking intersection of dims")
+            print("for satellite data taking intersection of dims")
+            # {k: len(v.dims['date']) for k,v in self.sats.items()}
+            int_dims = DataDict.dims_intersection(*[v.dims for k, v in sats.items()])
+            for k in sats.keys():
+                org_dims = {kk: len(vv) for kk, vv in sats[k].dims.items()}
+                print(f"{k} - original dim sizes: {org_dims}")
+                sats[k] = sats[k].subset(select_dims=int_dims)
+            print("new_dims (sizes)")
+            print({k: len(v) for k, v in int_dims.items()})
+
         self.sats = sats
-
-        # {k: len(v.dims['date']) for k,v in self.sats.items()}
-        # int_dims = DataDict.dims_intersection(*[v.dims for k,v in self.sats.items()])
-
         self.obs = DataDict.concatenate(*[v for v in sats.values()],
                                         dim_name="sat",
                                         name="obs")
-
 
         # # ---
         # # date alignment
@@ -215,8 +225,16 @@ class DataLoader():
             print("reading 'aux' data")
         prefix_list = ["lon", "lat", "x", "y"]
         pre_prefix = "new_" if get_new else ""
-        self.aux = {p: np.load(os.path.join(aux_data_dir, f"{pre_prefix}{p}_{grid_res}.npy"))
-                    for p in prefix_list}
+
+        aux_dict = {}
+        for p in prefix_list:
+            try:
+                aux_dict[p] = np.load(os.path.join(aux_data_dir, f"{pre_prefix}{p}_{grid_res}.npy"))
+            except Exception as e:
+                print(f"issue reading aux data with prefix: {p}\nError: {e}")
+        self.aux = aux_dict
+        # self.aux = {p: np.load(os.path.join(aux_data_dir, f"{pre_prefix}{p}_{grid_res}.npy"))
+        #             for p in prefix_list}
         self.aux = {k: DataDict(vals=v)
                     for k, v in self.aux.items()}
 
@@ -269,9 +287,18 @@ class DataLoader():
 
         # TODO: deal with FYI being 181x181 (for 50)
         # - why is that the case
-        cs2_FYI = np.load(
-            os.path.join(aux_data_dir,
-                         f'CS2_{grid_res}km_FYI_20181101-20190428.npy'))
+
+        # try/except needed because there is no 50km FYI data - use 25km instead
+        try:
+            cs2_FYI = np.load(
+                os.path.join(aux_data_dir,
+                             f'CS2_{grid_res}km_FYI_20181101-20190428.npy'))
+        except FileNotFoundError:
+            if (grid_res == 50) | (grid_res == '50'):
+                print(f"grid_res: {grid_res} FYI not found, will try grid_res: 25")
+            cs2_FYI = np.load(
+                os.path.join(aux_data_dir,
+                             f'CS2_25km_FYI_20181101-20190428.npy'))
 
         # create an array of dates
         cs2_FYI_dates = np.arange(np.datetime64("2018-11-01"), np.datetime64("2019-04-29"))
