@@ -227,7 +227,7 @@ def SMLII(hypers, x, y, approx=False, M=None):
     return nlZ, dnlZ
 
 
-def SMLII_mod(hypers, x, y, approx=False, M=None, grad=True):
+def SMLII_mod(hypers, x, y, approx=False, M=None, grad=True, use_log=True):
     """
     Objective function to minimise when optimising the model
     hyperparameters. This function is the negative log marginal likelihood.
@@ -244,9 +244,15 @@ def SMLII_mod(hypers, x, y, approx=False, M=None, grad=True):
     # ell = [np.exp(hypers[0]), np.exp(hypers[1]), np.exp(hypers[2])]
     # sf2 = np.exp(hypers[3])
     # sn2 = np.exp(hypers[4])
-    ell = np.exp(hypers[:-2])
-    sf2 = np.exp(hypers[-2])
-    sn2 = np.exp(hypers[-1])
+
+    if use_log:
+        ell = np.exp(hypers[:-2])
+        sf2 = np.exp(hypers[-2])
+        sn2 = np.exp(hypers[-1])
+    else:
+        ell = hypers[:-2]
+        sf2 = hypers[-2]
+        sn2 = hypers[-1]
 
     n = len(y)
     Kx, dK = SGPkernel(x, grad=True, ell=ell, sigma=sf2)
