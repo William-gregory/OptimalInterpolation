@@ -3,6 +3,7 @@
 import numpy as np
 import pandas as pd
 import os
+import json
 import re
 import pickle
 import warnings
@@ -88,10 +89,7 @@ class DataLoader():
                       sat_list=None,
                       season="2018-2019",
                       grid_res=None,
-                      take_dim_intersect=True,
-                      make_obs=True,
-                      combine_all=True,
-                      common_dates=True):
+                      take_dim_intersect=True):
         # TODO: only allow for one season at a time
 
         # get the grid_res to use
@@ -139,61 +137,6 @@ class DataLoader():
         self.obs = DataDict.concatenate(*[v for v in sats.values()],
                                         dim_name="sat",
                                         name="obs")
-
-        # # ---
-        # # date alignment
-        # # ---
-        #
-        # # TODO: allow for all dates to be returned, wont be able concatenate
-        # # TODO: review this, getting the common dates does not seem needed
-        # # take only the intersection
-        #
-        # if common_dates:
-        #     sat_dates = {k: v.dims['date'] for k, v in sats.items()}
-        #
-        #     common_dates = reduce(lambda x, y: np.intersect1d(x, y),
-        #                           [v for v in sat_dates.values()])
-        #
-        #     if self.verbose:
-        #         print(f"found: {len(common_dates)} common_dates in the data, will use only these dates")
-        #         if self.verbose > 1:
-        #             for k, v in sats.items():
-        #                 print(f"{k}: {len(v.dims['date'])}")
-        #
-        #     # for each dataset only take the dates which are common
-        #     for k in sats.keys():
-        #
-        #         sats[k].subset(select_dims={"date": common_dates}, inplace=True)
-        #         # v = sats[k]
-        #         # date_bool = np.in1d(v.dims['date'], common_dates)
-        #         # v['data'] = v['data'][..., date_bool]
-        #         # v['dims']['date'] = v['dims']['date'][date_bool]
-        #
-        #
-        # if combine_all:
-        #     # sat_dim = np.array(list(sats))
-        #     # concatenate data
-        #     obs = DataDict.concatenate(*[v for v in sats.values()],
-        #                                dim_name="sat",
-        #                                name="obs")
-        #     # tmp = np.concatenate([v[..., None]
-        #     #                       for k, v in sats.items()], axis=-1)
-        #     #
-        #     #
-        #     #
-        #     # # just to be consistent with previous layout, will swap axis
-        #     # tmp = tmp.swapaxes(2, 3)
-        #     #
-        #     # dims = {
-        #     #     'y': sats[sat_dim[0]]['dims']['y'],
-        #     #     'x': sats[sat_dim[0]]['dims']['x'],
-        #     #     'sat': sat_dim,
-        #     #     'date': sats[sat_dim[0]]['dims']['date']
-        #     # }
-        #
-        #     self.obs = obs
-        # else:
-        #     self.obs = sats
 
     def load_aux_data(self,
                       aux_data_dir=None,
@@ -574,6 +517,26 @@ class DataLoader():
 
         return out
 
+    @staticmethod
+    def _compare_dicts(d0, d1, chk_keys=None, verbose=False):
+
+        if chk_keys is None:
+            print("checking all keys")
+            chk_keys = list(d0.keys())
+
+        keys_matched = True
+        for ck in chk_keys:
+
+            try:
+                if d0[ck] != d1[ck]:
+                    print(f"key: {ck} did not match")
+                    keys_matched = False
+            except Exception as e:
+                print(f"error on key: {ck}\nError:\n{e}")
+                keys_matched = False
+        if verbose:
+            print("all keys matched")
+        return keys_matched
 
     def read_results(self,
                      results_dir,
@@ -581,7 +544,9 @@ class DataLoader():
                      date_cols=None,
                      attr_cols=None,
                      grid_res_loc=None,
-                     unflatten=True):
+                     grid_size=360,
+                     unflatten=True,
+                     dates=None):
         if self.verbose:
             print(f"reading previously generated outputs from:\n{results_dir}\nfrom files:\n{file}")
         assert file in ["results.csv", "prediction.csv"], f"file: {file} not valid"
@@ -604,6 +569,15 @@ class DataLoader():
 
         assert os.path.exists(results_dir)
 
+        # read in the input_config found in the results_dir (top level)
+        config_file = os.path.join(results_dir, "input_config.json")
+        assert os.path.exists(config_file), f"input_config.json not found in results_dir:\n{results_dir}"
+
+        with open(config_file, "r") as f:
+            config = json.load(f)
+
+        chk_keys = [k for k in config.keys() if k not in ["dates", "run_info"]]
+
         # get the dates in results dir - i.e. the date stamped directories
         date_dirs = np.sort([i for i in os.listdir(results_dir) if i.isdigit()])
 
@@ -616,11 +590,42 @@ class DataLoader():
 
         for idx, date in enumerate(date_dirs):
 
+            if dates is not None:
+                if date not in dates:
+                    print(f"skipping date: {date} because it's not in provided set: {dates}")
+                    continue
+
+            # check the input_config file
+            date_conf_file = os.path.join(results_dir, date, "input_config.json")
+
+            with open(date_conf_file, "r") as f:
+                dconf = json.load(f)
+
+            if not self._compare_dicts(config, dconf, chk_keys):
+                print(f"some keys did not match for date: {date}, will skip")
+                continue
+
+            # check commit hash
+            # - this could be to strict? however would expect results to be generated at same time
+            comm0 = config['run_info']['git_info']['details'][0]
+            comm1 = dconf['run_info']['git_info']['details'][0]
+            if (comm0 != comm1):
+                print(f"commits did not match, skipping date: {date}")
+                continue
+
             print(date)
             if file == "results.csv":
                 try:
                     # results contains attributes / parameters
                     res = pd.read_csv(os.path.join(results_dir, date, "results.csv"))
+                    # HACK: check if some rows are all nan
+                    if res.isnull().all(axis=1).any():
+                        print("some rows had all nan")
+                        res = res.loc[~res.isnull().all(axis=1)]
+                        int_col = ['date', 'grid_loc_0', 'grid_loc_1']
+                        for ic in int_col:
+                            res[ic] = res[ic].astype(int)
+
                     res_list.append(res)
                 except FileNotFoundError:
                     print("results.csv file not found, skipping")
@@ -660,8 +665,8 @@ class DataLoader():
             if grid_res_loc:
                 if self.verbose:
                     print(f"grid_res_loc: {grid_res_loc} provided will hard coded grid_loc_# values")
-                udims['grid_loc_0'] = np.arange(360) if grid_res_loc == 25 else np.arange(180)
-                udims['grid_loc_1'] = np.arange(360) if grid_res_loc == 25 else np.arange(180)
+                udims['grid_loc_0'] = np.arange(grid_size) if grid_res_loc == 25 else np.arange(grid_size/2)
+                udims['grid_loc_1'] = np.arange(grid_size) if grid_res_loc == 25 else np.arange(grid_size/2)
 
             for k in dd.keys():
                 dd[k] = dd[k].unflatten(udims=udims)
@@ -685,6 +690,13 @@ class DataLoader():
         for k, v in attr_vals.items():
             for kk in dd.keys():
                 dd[kk][k] = v
+
+        # add input config as attribute
+        # for kk in dd.keys():
+        #     dd[kk]['config'] = config
+
+        # store as input_config
+        dd['input_config'] = config
 
         return dd
 
