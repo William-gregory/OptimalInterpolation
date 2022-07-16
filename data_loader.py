@@ -145,7 +145,8 @@ class DataLoader():
                       load_sie=True,
                       load_fyi=True,
                       get_new=False,
-                      get_bin_center=True):
+                      get_bin_center=True,
+                      legacy_projection=False):
         # TODO: set a default dir
 
         assert season is not None, f"season not provided, please provided"
@@ -185,7 +186,8 @@ class DataLoader():
             assert not get_new, f"get_bin_center is :{get_bin_center} but so is get_new: {get_new}, " \
                                 f"which expects to read centered data"
             self.aux = self.move_to_bin_center_get_lon_lat(self.aux['x'].vals,
-                                                           self.aux['y'].vals)
+                                                           self.aux['y'].vals,
+                                                           legacy_projection=legacy_projection)
 
         if load_sie:
             self.load_sie_data(sie_data_dir=os.path.join(aux_data_dir, "SIE"),
@@ -251,11 +253,16 @@ class DataLoader():
         self.fyi.set_dim_idx(dim_idx="idx2", new_idx="date", dim_vals=cs2_FYI_dates)
 
     @classmethod
-    def move_to_bin_center_get_lon_lat(self, x, y):
+    def move_to_bin_center_get_lon_lat(self, x, y, legacy_projection=False):
         xnew = self.center_of_grid(x)
         ynew = self.center_of_grid(y)
 
-        lon, lat = EASE2toWGS84_New(xnew, ynew)
+        if legacy_projection:
+            m = grid_proj(lon_0=360)
+            lon, lat = m(xnew, ynew, inverse=True)
+        else:
+            lon, lat = EASE2toWGS84_New(xnew, ynew)
+
         out = {
             "lon": DataDict(lon),
             "lat": DataDict(lat),

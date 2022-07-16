@@ -530,15 +530,16 @@ def move_to_archive(top_dir, file_names=None, suffix="", verbose=False):
             print(f"{fn} not found")
 
 
-
-
-def plot_pcolormesh(ax,  lon, lat, plot_data,
+def plot_pcolormesh(ax, lon, lat, plot_data,
                     fig=None,
                     title=None,
                     vmin=None,
                     vmax=None,
                     cmap='YlGnBu_r',
-                    cbar_label=None):
+                    cbar_label=None,
+                    scatter=False,
+                    **scatter_args):
+    # TODO: finish with scatter option
     import cartopy.crs as ccrs
     import cartopy.feature as cfeat
 
@@ -550,12 +551,26 @@ def plot_pcolormesh(ax,  lon, lat, plot_data,
 
     if title:
         ax.set_title(title)
-    s = ax.pcolormesh(lon, lat, plot_data,
-                      cmap=cmap,
-                      vmin=vmin, vmax=vmax,
-                      transform=ccrs.PlateCarree(),
-                      linewidth=0,
-                      rasterized=True)
+
+    if not scatter:
+        s = ax.pcolormesh(lon, lat, plot_data,
+                          cmap=cmap,
+                          vmin=vmin, vmax=vmax,
+                          transform=ccrs.PlateCarree(),
+                          linewidth=0,
+                          rasterized=True)
+    else:
+        non_nan = ~np.isnan(plot_data)
+        s = ax.scatter(lon[non_nan],
+                       lat[non_nan],
+                       c=plot_data[non_nan],
+                       cmap=cmap,
+                       vmin=vmin, vmax=vmax,
+                       transform=ccrs.PlateCarree(),
+                       linewidth=0,
+                       rasterized=True,
+                       **scatter_args)
+
     if fig is not None:
         cbar = fig.colorbar(s, ax=ax, orientation='horizontal', pad=0.03, fraction=0.03)
         if cbar_label:

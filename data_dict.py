@@ -183,6 +183,24 @@ class DataDict(dict):
 
         return DataDict(vals=vals, dims=new_dims)
 
+    def __mul__(self, other):
+
+        new_dims = self._union_dims(other)
+
+        vals = self._reshape_and_move(self.vals, self.dims, new_dims) * \
+               self._reshape_and_move(other.vals, other.dims, new_dims)
+
+        return DataDict(vals=vals, dims=new_dims)
+
+    def __truediv__(self, other):
+
+        new_dims = self._union_dims(other)
+
+        vals = self._reshape_and_move(self.vals, self.dims, new_dims) / \
+               self._reshape_and_move(other.vals, other.dims, new_dims)
+
+        return DataDict(vals=vals, dims=new_dims)
+
 
     def _pretty_print_dims(self):
         # TODO: want to be able to trim output
