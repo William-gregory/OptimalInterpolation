@@ -545,34 +545,33 @@ class DataLoader():
             print("all keys matched")
         return keys_matched
 
-    def read_results(self,
-                     results_dir,
-                     file="results.csv",
-                     date_cols=None,
-                     attr_cols=None,
-                     grid_res_loc=None,
-                     grid_size=360,
-                     unflatten=True,
-                     dates=None):
+    def read_results(self, results_dir,
+                     file="results.csv", data_cols=None,
+                     attr_cols=None, grid_res_loc=None,
+                     grid_size=360, unflatten=True, dates=None):
         if self.verbose:
             print(f"reading previously generated outputs from:\n{results_dir}\nfrom files:\n{file}")
-        assert file in ["results.csv", "prediction.csv"], f"file: {file} not valid"
+        # assert file in ["results.csv", "prediction.csv"], f"file: {file} not valid"
+        # assert file in os.listdir(results_dir), f"file: {file} is not in results_dir:\n{results_dir}"
 
-        if date_cols is None:
+
+        if data_cols is None:
             if self.verbose:
                 print("data_cols not provided, getting default values ")
-            if file == "results.csv":
+            if re.search("^results", file):
                 data_cols = ['x', 'y', 'lon', 'lat',
-                             'num_inputs', 'optimise_success', "run_time",
+                             'num_inputs', 'optimise_success',# "run_time",
                              "marginal_loglikelihood",
                              "ls_x", "ls_y", "ls_t",
                              "kernel_variance", "likelihood_variance",
                              ]
+            # otherwise expect predictions
             else:
                 # data_cols =['f*', 'f*_var', 'y', 'y_var', 'grid_loc_0', 'grid_loc_1', 'proj_loc_0', 'proj_loc_1',
                 #             'mean', 'date', 'xs_x', 'xs_y', 'xs_t', 'run_time']
                 data_cols = ['f*', 'f*_var', 'y', 'y_var', 'mean',
-                             'xs_x', 'xs_y', 'xs_t', 'run_time']
+                             'xs_x', 'xs_y', 'xs_t', #'run_time'
+                             ]
 
         assert os.path.exists(results_dir)
 
@@ -621,10 +620,17 @@ class DataLoader():
                 continue
 
             print(date)
-            if file == "results.csv":
+            # if file == "results.csv":
+            if re.search("^results", file):
+                print("reading a 'results' file")
                 try:
                     # results contains attributes / parameters
-                    res = pd.read_csv(os.path.join(results_dir, date, "results.csv"))
+                    res = pd.read_csv(os.path.join(results_dir, date, file))
+
+                    # HACK: x,y (location) values had names change to x_loc, y_loc
+                    #  - however some down stream functions expect to have x,y
+                    res.rename(columns={"x_loc": "x", "y_loc": "y"}, inplace=True)
+
                     # HACK: check if some rows are all nan
                     if res.isnull().all(axis=1).any():
                         print("some rows had all nan")
@@ -638,8 +644,9 @@ class DataLoader():
                     print("results.csv file not found, skipping")
                     continue
             else:
+                print("reading a 'predictions' file")
                 try:
-                    pred = pd.read_csv(os.path.join(results_dir, date, "prediction.csv"))
+                    pred = pd.read_csv(os.path.join(results_dir, date, file))
                     # HACK: this shouldn't need to be done, change data at source instead of here
                     pred.rename(columns={c: c.lstrip() for c in pred.columns}, inplace=True)
 
@@ -655,6 +662,7 @@ class DataLoader():
         rdf['date'] = rdf['date'].astype(str)
 
         miss_data_cols = np.array(data_cols)[~np.in1d(data_cols, rdf.columns)]
+
         assert len(miss_data_cols) == 0, f"data_cols: {miss_data_cols} not in data"
 
         dim_cols = ["grid_loc_0", "grid_loc_1", "date"]
@@ -681,7 +689,7 @@ class DataLoader():
         if attr_cols is None:
             if self.verbose:
                 print("using default attr_cols")
-            if file == "results.csv":
+            if re.search("^results", file):
                 attr_cols = ["scale_x", "scale_y", "scale_t", "scale_output"]
             else:
                 attr_cols = []
