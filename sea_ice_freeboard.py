@@ -547,7 +547,11 @@ class SeaIceFreeboard(DataLoader):
                 f"mean_function: {mean_function} not in a valid option:\n" \
                 f"{list(self.mean_functions.keys())}"
 
-            mean_function = self.mean_functions[mean_function]
+            # NOTE: using the class attribute likely will use the same object
+            # - which lead the optimizer failing?
+            if mean_function == 'constant':
+                mean_function = Constant()
+            # mean_function = self.mean_functions[mean_function]
 
         # ---
         # kernel
