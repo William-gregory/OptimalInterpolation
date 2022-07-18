@@ -14,6 +14,8 @@ from OptimalInterpolation.data_loader import DataLoader
 from OptimalInterpolation.utils import WGS84toEASE2_New, \
     EASE2toWGS84_New, SMLII_mod, SGPkernel, GPR
 
+from gpflow.mean_functions import Constant
+
 
 class PurePythonGPR():
     """Pure Python GPR class - used to hold model details from pure python implementation"""
@@ -109,6 +111,10 @@ class PurePythonGPR():
 
 
 class SeaIceFreeboard(DataLoader):
+
+    mean_functions = {
+        "constant": Constant()
+    }
 
     def __init__(self, grid_res="25km", sat_list=None, verbose=True,
                  length_scale_name = None):
@@ -422,10 +428,12 @@ class SeaIceFreeboard(DataLoader):
                   length_scale_ub=None,
                   scale_outputs=1.0,
                   scale_inputs=None,
+                  mean_function=None,
                   engine="GPflow"):
 
+        # TOD0: length scales and variances should be scaled in the same way as inputs /outputs
         # TODO: have a check / handle on the valid kernels
-        # TOOD: allow for kernels to be provided as objects, rather than just str
+        # TODO: allow for kernels to be provided as objects, rather than just str
 
         assert engine in self.valid_gpr_engine, f"method: {engine} is not in valid methods" \
                                                 f"{self.valid_gpr_engine}"
@@ -483,7 +491,8 @@ class SeaIceFreeboard(DataLoader):
 
         if length_scales is None:
             length_scales = np.ones(inputs.shape[1]) if len(inputs.shape) == 2 else np.array([1.0])
-        length_scales = self._float_list_to_array(length_scales)
+        # length_scales = self._float_list_to_array(length_scales)
+        length_scales, = to_array(length_scales)
 
         if self.verbose:
             print(f"length_scale: {length_scales}")
@@ -499,9 +508,12 @@ class SeaIceFreeboard(DataLoader):
                                likeli_var=likeli_var,
                                length_scale_lb=length_scale_lb,
                                length_scale_ub=length_scale_ub,
+                               mean_function=mean_function,
                                kernel=kernel)
         elif engine == "PurePython":
             self.engine = engine
+
+            assert mean_function is None, "mean_function is not None and engine='PurePython', this isn't handled"
             self._build_ppython(x=self.x,
                                 y=self.y,
                                 length_scales=length_scales,
@@ -519,10 +531,24 @@ class SeaIceFreeboard(DataLoader):
                       likeli_var=1.0,
                       length_scale_lb=None,
                       length_scale_ub=None,
-                      kernel="Matern32"):
+                      kernel="Matern32",
+                      mean_function=None):
 
         # require the provide
         assert kernel in gpflow.kernels.__dict__['__all__'], f"kernel provide: {kernel} not value for GPflow"
+
+        # ---
+        # mean function
+        # ---
+
+        if mean_function is not None:
+
+            assert mean_function in self.mean_functions, \
+                f"mean_function: {mean_function} not in a valid option:\n" \
+                f"{list(self.mean_functions.keys())}"
+
+            mean_function = self.mean_functions[mean_function]
+
         # ---
         # kernel
         # ---
@@ -556,7 +582,7 @@ class SeaIceFreeboard(DataLoader):
 
         m = gpflow.models.GPR(data=(x, y),
                               kernel=k,
-                              mean_function=None,
+                              mean_function=mean_function,
                               noise_variance=likeli_var)
 
         self.model = m
@@ -593,8 +619,9 @@ class SeaIceFreeboard(DataLoader):
         """get the hyper parameters from a GPR model"""
         assert self.engine in self.valid_gpr_engine, f"engine: {self.engine} is not valid"
 
+        mean_func_params = {}
         if self.engine == "GPflow":
-
+            # TODO: if model has mean_function attribute specified, get parameter
             # length scales
             # TODO: determine here if want to change the length scale names
             #  to correspond with dimension names
@@ -604,6 +631,15 @@ class SeaIceFreeboard(DataLoader):
             # variances
             kvar = float(self.model.kernel.variance.numpy())
             lvar = float(self.model.likelihood.variance.numpy())
+
+            # check for mean_function parameters
+            if hasattr(self.model, 'mean_function'):
+
+                if self.model.mean_function.name == "constant":
+                    mean_func_params["mean_func"] = self.model.mean_function.name
+                    mean_func_params["mean_func_c"] = float(self.model.mean_function.c.numpy())
+                else:
+                    warnings.warn(f"mean_function.name: {self.model.mean_function.name} not understood")
 
         elif self.engine == "PurePython":
 
@@ -624,10 +660,16 @@ class SeaIceFreeboard(DataLoader):
             kvar /= self.scale_outputs ** 2
             lvar /= self.scale_outputs ** 2
 
+            # TODO: double check scaling of mean function values
+            for k in mean_func_params.keys():
+                if isinstance(mean_func_params[k], (int, float)):
+                    mean_func_params[k] /= self.scale_outputs
+
         out = {
             **lscale,
             "kernel_variance": kvar,
-            "likelihood_variance": lvar
+            "likelihood_variance": lvar,
+            **mean_func_params
         }
 
         return out
