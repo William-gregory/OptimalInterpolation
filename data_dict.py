@@ -7,6 +7,8 @@ import pandas as pd
 import datetime
 import warnings
 
+# for smoothing of values by date
+from astropy.convolution import convolve, Gaussian2DKernel
 
 def to_array(*args, date_format="%Y-%m-%d"):
     """
@@ -520,30 +522,31 @@ class DataDict(dict):
 
         # check all the dims match
         if len(obs) == 1:
-            print("only one object provided, noting to concatenate")
-            return obs
-        else:
-            # check objects are all correct class
-            for i, o in enumerate(obs):
-                assert isinstance(o, cls), f"object: {i} was wrong class, got: {type(o)}"
+            print(f"only one object provided, will effectively just add dimension: {dim_name}")
+            # return obs[0]
 
-            # check the dims match
-            for i in range(1, len(obs)):
-                assert cls.dims_equal(obs[i - 1].dims, obs[i].dims), f"obs[{i - 1}].dims != obs[{i}].dims"
-            # require each object is not flat
-            for ob in obs:
-                assert not ob.flat
-            # require all the names are unique
-            dim_idx = np.array([ob.name for ob in obs])
-            assert len(dim_idx) == len(np.unique(dim_idx))
+        # else:
+        # check objects are all correct class
+        for i, o in enumerate(obs):
+            assert isinstance(o, cls), f"object: {i} was wrong class, got: {type(o)}"
 
-            # add dimension vals and concatentate together
-            vals = np.concatenate([ob.vals[..., None] for ob in obs], axis=-1)
+        # check the dims match
+        for i in range(1, len(obs)):
+            assert cls.dims_equal(obs[i - 1].dims, obs[i].dims), f"obs[{i - 1}].dims != obs[{i}].dims"
+        # require each object is not flat
+        for ob in obs:
+            assert not ob.flat
+        # require all the names are unique
+        dim_idx = np.array([ob.name for ob in obs])
+        assert len(dim_idx) == len(np.unique(dim_idx))
 
-            dims = obs[0].dims.copy()
-            dims[dim_name] = dim_idx
+        # add dimension vals and concatentate together
+        vals = np.concatenate([ob.vals[..., None] for ob in obs], axis=-1)
 
-            return DataDict(vals=vals, dims=dims, is_flat=False, name=name)
+        dims = obs[0].dims.copy()
+        dims[dim_name] = dim_idx
+
+        return DataDict(vals=vals, dims=dims, is_flat=False, name=name)
 
     def not_nan(self, inplace=False):
         return self.subset(select_array=~np.isnan(self.vals), inplace=inplace)
@@ -565,6 +568,58 @@ class DataDict(dict):
     def from_dataframe(self):
         """make DataDict from a DataFrame"""
         warnings.warn("from_dataframe not implemented")
+
+    def clip_smooth_by_date(self, nan_mask=None, vmin=None, vmax=None, std=1):
+        """clip smooth a DataDict object that has date in dims
+        - expect remaining dim to be 2d
+        """
+        # assert isinstance(obj, DataDict), f"obj needs to be DataDict, got: {type(obj)}"
+
+        assert "date" in self.dims, f"date not in dims"
+        assert not self.flat, "must not be flat"
+        assert len(self.vals.shape) == 3, "can only handle 3-d data"
+
+        if nan_mask is not None:
+            assert nan_mask.shape == tuple([len(v) for k, v in self.dims.items() if k != "date"]), \
+                f"nan_mask.shape = {nan_mask.shape}, not in align with obj shape"
+
+        out = []
+        for date in self.dims['date']:
+
+            # the following was mostly just copied from smooth()
+            # select data
+            data_smth = self.subset(select_dims={"date": date}).vals.copy()
+            data_smth = np.squeeze(data_smth)
+            if data_smth.dtype != float:
+                data_smth = data_smth.astype('float')
+
+            # apply convolution on squeezed values
+            data_smth[np.isinf(data_smth)] = np.nan
+            if vmax is not None:
+                data_smth[data_smth >= vmax] = vmax
+            if vmin is not None:
+                data_smth[data_smth <= vmin] = vmin
+            # TODO: review this -
+            data_smth = convolve(data_smth,
+                                 Gaussian2DKernel(x_stddev=std, y_stddev=std))
+            # TODO: this is in included for legacy reasons, requires review
+            #  - i.e. when / where would it get populated with zeros?
+            data_smth[data_smth == 0] = np.nanmean(data_smth)
+            if nan_mask is not None:
+                data_smth[nan_mask] = np.nan
+
+            new_dims = {k: v for k, v in self.dims.items() if k != 'date'}
+            out.append(DataDict(vals=data_smth, dims=new_dims, is_flat=False, name=date))
+
+        # TODO: clip_smooth_each_date add smooth to name? keep name
+        out = DataDict.concatenate(*out, dim_name="date", name=self.name)
+        out.movedims('date', 2)
+        # include key,values (?)
+        for k, v in self.items():
+            out[k] = v
+
+        return out
+
 
 if __name__ == "__main__":
 
