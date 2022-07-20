@@ -550,7 +550,7 @@ class SeaIceFreeboard(DataLoader):
             # NOTE: using the class attribute likely will use the same object
             # - which lead the optimizer failing?
             if mean_function == 'constant':
-                mean_function = Constant()
+                mean_function = Constant(c=np.array([np.mean(y)]))
             # mean_function = self.mean_functions[mean_function]
 
         # ---
@@ -637,7 +637,7 @@ class SeaIceFreeboard(DataLoader):
             lvar = float(self.model.likelihood.variance.numpy())
 
             # check for mean_function parameters
-            if hasattr(self.model, 'mean_function'):
+            if self.model.mean_function.name != "zero":
 
                 if self.model.mean_function.name == "constant":
                     mean_func_params["mean_func"] = self.model.mean_function.name

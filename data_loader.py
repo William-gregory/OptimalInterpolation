@@ -641,7 +641,7 @@ class DataLoader():
 
                     res_list.append(res)
                 except FileNotFoundError:
-                    print("results.csv file not found, skipping")
+                    print(f"file: {file} not found, skipping")
                     continue
             else:
                 print("reading a 'predictions' file")

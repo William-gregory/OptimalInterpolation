@@ -168,38 +168,53 @@ class DataDict(dict):
 
     def __add__(self, other):
 
-        new_dims = self._union_dims(other)
+        if isinstance(other, DataDict):
+            new_dims = self._union_dims(other)
 
-        vals = self._reshape_and_move(self.vals, self.dims, new_dims) + \
-               self._reshape_and_move(other.vals, other.dims, new_dims)
+            vals = self._reshape_and_move(self.vals, self.dims, new_dims) + \
+                   self._reshape_and_move(other.vals, other.dims, new_dims)
+
+        else:
+            new_dims = self.dims
+            vals = self.vals + other
 
         # TODO: consider applying a name here?
         return DataDict(vals=vals, dims=new_dims)
 
     def __sub__(self, other):
 
-        new_dims = self._union_dims(other)
+        if isinstance(other, DataDict):
+            new_dims = self._union_dims(other)
 
-        vals = self._reshape_and_move(self.vals, self.dims, new_dims) - \
-               self._reshape_and_move(other.vals, other.dims, new_dims)
+            vals = self._reshape_and_move(self.vals, self.dims, new_dims) - \
+                   self._reshape_and_move(other.vals, other.dims, new_dims)
+        else:
+            new_dims = self.dims
+            vals = self.vals - other
 
         return DataDict(vals=vals, dims=new_dims)
 
     def __mul__(self, other):
+        if isinstance(other, DataDict):
+            new_dims = self._union_dims(other)
 
-        new_dims = self._union_dims(other)
-
-        vals = self._reshape_and_move(self.vals, self.dims, new_dims) * \
-               self._reshape_and_move(other.vals, other.dims, new_dims)
+            vals = self._reshape_and_move(self.vals, self.dims, new_dims) * \
+                   self._reshape_and_move(other.vals, other.dims, new_dims)
+        else:
+            new_dims = self.dims
+            vals = self.vals * other
 
         return DataDict(vals=vals, dims=new_dims)
 
     def __truediv__(self, other):
+        if isinstance(other, DataDict):
+            new_dims = self._union_dims(other)
 
-        new_dims = self._union_dims(other)
-
-        vals = self._reshape_and_move(self.vals, self.dims, new_dims) / \
-               self._reshape_and_move(other.vals, other.dims, new_dims)
+            vals = self._reshape_and_move(self.vals, self.dims, new_dims) / \
+                   self._reshape_and_move(other.vals, other.dims, new_dims)
+        else:
+            new_dims = self.dims
+            vals = self.vals / other
 
         return DataDict(vals=vals, dims=new_dims)
 
@@ -486,7 +501,6 @@ class DataDict(dict):
         source = match(src, list(self.dims.keys()))
         self.moveaxis(source, dst)
 
-
     def moveaxis(self, source, destination):
         source, destination = to_array(source, destination)
         order = [n for n in range(self.vals.ndim) if n not in source]
@@ -620,6 +634,21 @@ class DataDict(dict):
 
         return out
 
+    @staticmethod
+    def full(shape=None, dims=None, fill_val=None, name=None, dtype=None):
+        """create an array 'full' of fill_value"""
+
+        if shape is None:
+            assert dims is not None, f"either shape or dims must be provided to full"
+            shape = [len(v) for v in dims.values()]
+        assert fill_val is not None, "please pick a different fill_val than None"
+        vals = np.full(shape, fill_val)
+
+        if dtype is not None:
+            vals = vals.astype(dtype)
+
+        return DataDict(vals=vals, dims=dims, name=name, is_flat=len(shape)==1)
+
 
 if __name__ == "__main__":
 
@@ -646,12 +675,19 @@ if __name__ == "__main__":
     d = DataDict(vals=vals, dims=dims, name="data")
 
     # --
+    # full of fill_vals
+    # --
+
+    df = DataDict.full(shape=(2, 3, 4), fill_val=9)
+
+    # --
     # copy object
     # --
 
     d2 = d.copy(new_name="new_data")
 
     print(f"copy data object is equal: {d.equal(d2, verbose=False)}")
+
 
     # --
     # move axis (and dimensions)
@@ -729,6 +765,12 @@ if __name__ == "__main__":
     # add
     d3 = d2 + d2
     assert np.allclose(d3.vals, d2.vals * 2), f"adding DataDict did not work as expected"
+
+    # add with scalar
+    _ = DataDict.full(dims=d2.dims, fill_val=5.) + 3
+    _ = np.unique(_.vals)
+    assert (len(_) == 1) & (_ == 8.0)
+
 
     # when dims equal addition operation is symetric
     assert (d2 + d).equal(d + d2) & DataDict.dims_equal(d2.dims, d.dims)
