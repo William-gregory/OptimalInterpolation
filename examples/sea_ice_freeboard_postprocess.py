@@ -1,54 +1,62 @@
 # example of running sea ice freeboard interpolation (for a given date)
 
-import time
+
 import os
 import json
-import datetime
-import subprocess
-import numpy as np
-import pandas as pd
 
-from OptimalInterpolation import get_data_path, get_path
+from OptimalInterpolation import get_data_path, get_path, read_key_from_config
 from OptimalInterpolation.sea_ice_freeboard import SeaIceFreeboard
-from OptimalInterpolation.utils import EASE2toWGS84_New, get_git_information, move_to_archive
 
 if __name__ == "__main__":
 
-    t_total0 = time.time()
-
-    output_base_dir = get_path()
+    # directory to store results
+    output_base_dir = get_path("results", "local_results", "test")
 
     # ---
     # input config
     # ---
 
+    grid_res = 50
+    coarse_grid_spacing = 1
+
+    # directory containing previous results
+    gdrive_subdir = "Dissertation/refactored"
+    gdrive = read_key_from_config("directory_locations", "gdrive",
+                                  example="gdrive")
+
+    tmp_dir = f"radius300_daysahead4_daysbehind4_gridres{grid_res}_season2018-2019_coarsegrid{coarse_grid_spacing}_holdout_boundlsFalse"
+    prev_results_dir = os.path.join(gdrive, gdrive_subdir, tmp_dir)
+
+
+    assert os.path.exists(prev_results_dir)
+
     config = {
         "dates": ["20181201"],  # , "20190101", "20190201", "20190301"],
-        "optimise": True,
+        "optimise": False,
+        "file_suffix": "_replicate",
+        "output_dir": output_base_dir,
         "inclusion_radius": 300,
         "days_ahead": 4,
         "days_behind": 4,
         "data_dir": "package",
         "season": "2018-2019",
-        "grid_res": 25,
-        "coarse_grid_spacing": 5,
+        "grid_res": grid_res,
+        "coarse_grid_spacing": 1,
         "min_inputs": 5,
         "verbose": 1,
         "engine": "GPflow",
         "kernel": "Matern32",
         # "mean_function": "constant",
-        "hold_out": ["S3B"],
+        # "hold_out": ["S3B"],
         "predict_on_hold": True,
         "scale_inputs": True,
         "scale_outputs": False,
         "bound_length_scales": False,
         "append_to_file": True,
-        "output_dir": os.path.join(output_base_dir, "test"),
-        "file_suffix": "",
         "post_process": {
-            "prev_results": None,
+            "prev_results_dir": prev_results_dir, #"<path/to/previous/results>",
+            "prev_results_file": "results.csv",
             "clip_and_smooth": False,
-            "engine": "GPflow",
             "vmax_map": {
                 "ls_x": 2 * 300 * 1000,
                 "ls_y": 2 * 300 * 1000,
