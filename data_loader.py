@@ -546,9 +546,11 @@ class DataLoader():
         return keys_matched
 
     def read_results(self, results_dir,
-                     file="results.csv", data_cols=None,
+                     file="results.csv",
+                     data_cols=None,
                      attr_cols=None, grid_res_loc=None,
-                     grid_size=360, unflatten=True, dates=None):
+                     grid_size=360, unflatten=True, dates=None,
+                     file_suffix=""):
         if self.verbose:
             print(f"reading previously generated outputs from:\n{results_dir}\nfrom files:\n{file}")
         # assert file in ["results.csv", "prediction.csv"], f"file: {file} not valid"
@@ -576,8 +578,8 @@ class DataLoader():
         assert os.path.exists(results_dir)
 
         # read in the input_config found in the results_dir (top level)
-        config_file = os.path.join(results_dir, "input_config.json")
-        assert os.path.exists(config_file), f"input_config.json not found in results_dir:\n{results_dir}"
+        config_file = os.path.join(results_dir, f"input_config{file_suffix}.json")
+        assert os.path.exists(config_file), f"input_config{file_suffix}.json not found in results_dir:\n{results_dir}"
 
         with open(config_file, "r") as f:
             config = json.load(f)
@@ -602,7 +604,7 @@ class DataLoader():
                     continue
 
             # check the input_config file
-            date_conf_file = os.path.join(results_dir, date, "input_config.json")
+            date_conf_file = os.path.join(results_dir, date, f"input_config{file_suffix}.json")
 
             with open(date_conf_file, "r") as f:
                 dconf = json.load(f)
