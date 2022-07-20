@@ -1,9 +1,15 @@
 # Sea Ice Freeboard class - for interpolating using Gaussian Process Regression
 import re
+import os
+import json
 import gpflow
 import numpy as np
+import pandas as pd
 import scipy
 import warnings
+import datetime
+import time
+import subprocess
 
 import tensorflow as tf
 import tensorflow_probability as tfp
@@ -12,7 +18,7 @@ from OptimalInterpolation import get_data_path
 from OptimalInterpolation.data_dict import DataDict, match, to_array
 from OptimalInterpolation.data_loader import DataLoader
 from OptimalInterpolation.utils import WGS84toEASE2_New, \
-    EASE2toWGS84_New, SMLII_mod, SGPkernel, GPR
+    EASE2toWGS84_New, SMLII_mod, SGPkernel, GPR, get_git_information, move_to_archive
 
 from gpflow.mean_functions import Constant
 
@@ -445,13 +451,13 @@ class SeaIceFreeboard(DataLoader):
         # require inputs are 2-d
         # TODO: consider if checking shape should be done here,
         if len(self.x.shape) == 1:
-            if self.verbose:
+            if self.verbose > 1:
                 print("inputs was 1-d, broadcasting to make 2-d")
             self.x = self.x[:, None]
 
         # require outputs are 2-d
         if len(self.y.shape) == 1:
-            if self.verbose:
+            if self.verbose > 1:
                 print("outputs was 1-d, broadcasting to make 2-d")
             self.y = self.y[:, None]
 
@@ -472,14 +478,14 @@ class SeaIceFreeboard(DataLoader):
             f"scale_inputs did not match expected length: {self.x.shape[1]}"
 
         self.scale_inputs = scale_inputs
-        if self.verbose:
+        if self.verbose > 1:
             print(f"scaling inputs by: {scale_inputs}")
         self.x *= scale_inputs
 
         if scale_outputs is None:
             scale_outputs = np.array([1.0])
         self.scale_outputs = scale_outputs
-        if self.verbose:
+        if self.verbose > 1:
             print(f"scaling outputs by: {scale_outputs}")
         self.y *= scale_outputs
 
@@ -494,7 +500,7 @@ class SeaIceFreeboard(DataLoader):
         # length_scales = self._float_list_to_array(length_scales)
         length_scales, = to_array(length_scales)
 
-        if self.verbose:
+        if self.verbose > 1:
             print(f"length_scale: {length_scales}")
             print(f"kernel_var: {kernel_var}")
             print(f"likelihood_var: {likeli_var}")
@@ -768,7 +774,7 @@ class SeaIceFreeboard(DataLoader):
 
         # assert t is not None, f"t not provided"
         if t is None:
-            if self.verbose:
+            if self.verbose > 1:
                 print("t not provided, getting default")
             # t = self.input_params['days_behind']
             t = np.full(x.shape, 0)
@@ -937,177 +943,586 @@ class SeaIceFreeboard(DataLoader):
 
         return select_bool
 
+    @staticmethod
+    def hyper_params_for_date(date, prev_res=None, dims=None, length_scale_name=None):
+        # TODO: change hyper_params_for_date from a static method
+        assert date is not None
+        out = {}
+        select_dims = {
+            "date": date
+        }
+        if prev_res is not None:
+
+            # get the length scale - start with
+            for ls in [k for k in prev_res.keys() if re.search('^ls', k)]:
+                out[ls] = prev_res[ls].subset(select_dims=select_dims)
+
+            for _ in ['kernel_variance', "likelihood_variance"]:
+                out[_] = prev_res[_].subset(select_dims=select_dims)
+        else:
+            # TODO: here should allow for setting of hyper parameters
+            assert isinstance(dims, dict), "res is None, dims needs to be a dict"
+            assert isinstance(length_scale_name, (list, tuple, np.array))
+
+            if 'date' not in dims:
+                dims['date'] = np.array([date])
+
+            ls_keys = [k for k in length_scale_name if re.search('^ls', k)]
+            var_keys = ['kernel_variance', "likelihood_variance"]
+            for _ in ls_keys + var_keys:
+                # NOTE: this could be inefficient if dates in dim is big
+                out[_] = DataDict.full(dims=dims, fill_val=1.0, name=_).subset(select_dims)
+
+        return out
+
+    @staticmethod
+    def hyper_params_for_date_and_grid_loc(res, date, grid_loc,
+                                           ls_order=None):
+        assert len(grid_loc) == 2, "grid_loc should be a tuple of length 2"
+
+        # TODO: allow for hyper parameters to be missing, if missing provide None
+        out = {}
+        select_dims = {
+            "date": date,
+            "grid_loc_0": grid_loc[0],
+            "grid_loc_1": grid_loc[1]
+        }
+
+        # get the length scale - start with
+        ls_vals = {}
+        for ls in [k for k in res.keys() if re.search('^ls', k)]:
+            try:
+                ls_vals[ls] = res[ls].subset(select_dims=select_dims)
+            except Exception as e:
+                print(f"Error: {e}")
+                _ = 1
+                assert False
+        ls_order = list(ls_vals.keys()) if ls_order is None else ls_order
+        out['length_scales'] = [np.squeeze(ls_vals[ls].vals) for ls in ls_order]
+        out['length_scales'], = to_array(out['length_scales'])
+
+        for _ in ['kernel_variance', "likelihood_variance"]:
+            tmp = res[_].subset(select_dims=select_dims)
+            out[_] = np.squeeze(tmp.vals)
+
+        # TODO: handle the variance floor differently
+        if out['kernel_variance'] <= 1e-6:
+            print("kernel variance too low")
+            out['kernel_variance'] = 1.01e-6
+        if out['likelihood_variance'] <= 1e-6:
+            print("likelihood variance too low")
+            out['likelihood_variance'] = 1.01e-6
+
+        return out
+
+
+
+    def post_process(self,
+                     date,
+                     prev_results_file=None,
+                     prev_results_dir=None,
+                     clip_and_smooth=False,
+                     vmin_map=None,
+                     vmax_map=None,
+                     std=None,
+                     grid_res=None,
+                     big_grid_size=360):
+
+        # TODO: add option to provide previous result directly to post_process - instead of reading in from file
+        assert  grid_res is not None, "grid_res needs to be specified"
+        assert not isinstance(prev_results_file, dict), "prev_result type: dict not yet implemented"
+
+        assert isinstance(prev_results_file, (str, type(None)))
+
+        if prev_results_file is None:
+            if self.verbose:
+                print("in post_process: prev_result is None, will use naive hyper parameters")
+            hp_date = self.hyper_params_for_date(date=date, prev_res=None,
+                                                 dims=self.aux['x'].dims,
+                                                 length_scale_name=self.length_scale_name)
+
+        elif isinstance(prev_results_file, dict):
+            assert False, "prev_result type: dict not yet implemented"
+            # return hp_date
+        elif isinstance(prev_results_file, str):
+
+            # post_config = {}
+            # locs = locals()
+            # for k in range(self.post_process.__code__.co_argcount):
+            #     var = self.post_process.__code__.co_varnames[k]
+            #     post_config[var] = locs[var]
+            # post_config.pop('self')
+            #
+            # # with open(os.path.join(date_dir, f"postprocess_{file_suffix}.json"), "w") as f:
+            # #     json.dump(post_config, f, indent=4)
+            #
+
+            assert prev_results_dir is not None
+            assert os.path.exists(prev_results_dir)
+
+            # read in previous results
+            prev_res = self.read_results(results_dir=prev_results_dir,
+                                         file=prev_results_file,
+                                         grid_res_loc=grid_res,
+                                         grid_size=big_grid_size,
+                                         unflatten=True,
+                                         dates=[date])
+
+            # ---
+            # get the hyper parameters for the date
+            # ---
+
+            # TODO: consider storing hp_date as attributes
+            # - store hp_date as attribute
+            hp_date = self.hyper_params_for_date(date=date, prev_res=prev_res)
+
+            # ---
+            # apply clipping / smoothing
+            # ---
+
+            if clip_and_smooth:
+                # std = 50 / grid_res
+                assert std is not None, f"std in post process is None, please specify"
+                # --
+                # sie mask
+                # --
+
+                # use SIE to create a mask when clipping and smoothing hyper parameters
+                sie_mask = self.sie.subset(select_dims={'date': date})
+                sie_mask = np.isnan(sie_mask.vals)
+                sie_mask = np.squeeze(sie_mask)
+
+                # - be in 'post_process' config
+                for k in hp_date.keys():
+                    hp_date[k] = hp_date[k].clip_smooth_by_date(nan_mask=sie_mask,
+                                                                vmin=vmin_map[k] if isinstance(vmin_map, dict) else None,
+                                                                vmax=vmax_map[k] if isinstance(vmax_map, dict) else None,
+                                                                std=std)
+        return hp_date
+
 
     def run(self,
             date,
-            season="2018-2019",
+            output_dir,
             days_ahead=4,
             days_behind=4,
             incl_rad=300,
+            grid_res=25,
+            coarse_grid_spacing=1,
+            min_inputs=10,
+            min_sie=0.15,
             engine="GPflow",
             kernel="Matern32",
-            coarse_grid_spacing=1,
-            min_sie=0.15,
+            season='2018-2019',
+            optimise=True,
             hold_out=None,
+            scale_inputs=False,
+            scale_outputs=False,
+            append_to_file=True,
             pred_on_hold_out=True,
-            load_data=True,
-            aux_data_dir=None,
-            sat_data_dir=None):
+            bound_length_scales=True,
+            mean_function=None,
+            file_suffix="",
+            post_process=None):
         """
         wrapper function to run optimal interpolation of sea ice freeboard for a given date
         """
 
-        # TODO: SeaIceFreeboard run methods needs to be completed
-        if load_data:
-            # can load data via inherited DataLoader methods
-            aux_data_dir = aux_data_dir if aux_data_dir is not None else get_data_path("aux")
-            self.load_aux_data(aux_data_dir=aux_data_dir,
-                               season=season)
+        # TODO: allow reading from previous results - for intialisation
 
-            sat_data_dir = sat_data_dir if sat_data_dir is not None else get_data_path("CS2S3_CPOM")
-            self.load_obs_data(sat_data_dir=sat_data_dir,
-                               season=season)
+        # res = sifb.read_results(results_dir, file="results.csv", grid_res_loc=grid_res, grid_size=big_grid_size,
+        #                         unflatten=True)
 
-        assert self.aux is not None, f"aux attribute, run load_aux_data(), or set load_data=True"
-        assert self.obs is not None, f"obs attribute, run load_ons_data(), or set load_data=True"
+        result_file = f"results{file_suffix}.csv"
+        prediction_file = f"prediction{file_suffix}.csv"
+        config_file = f"input_config{file_suffix}.json"
+        skipped_file = f"skipped{file_suffix}.csv"
 
-        # ---
-        # locations to predict / build GP model
-        # ---
+        if post_process is None:
+            post_process = {}
 
-        select_bool = self.select_gp_locations(
-                            date=date,
-                            min_sie=min_sie,
-                            coarse_grid_spacing=coarse_grid_spacing,
-                            grid_space_offset=0,
-                            sat_names=hold_out)
-
-        # ---
-        # remove obs from hold_out sat
+        # ----
+        # get the input parameters
         # ---
 
-        # TODO: wrap this up into a method?
-        obs = self.obs['data'].copy()
-        if hold_out is not None:
+        # taken from answers:
+        # https://stackoverflow.com/questions/218616/how-to-get-method-parameter-names
+        config = {}
+        locs = locals()
+        for k in range(self.run.__code__.co_argcount):
+            var = self.run.__code__.co_varnames[k]
+            config[var] = locs[var]
+        # config['kwargs'] = locs['kwargs']
+
+        # ---
+        # modify / interpret parameters
+        # ---
+
+
+        # HARDCODED: the amount of scaling that is applied
+        # TODO: allow this to be specified by user - do the default if scale_inputs=True
+        if isinstance(scale_inputs, bool):
+            scale_inputs = [1 / (grid_res * 1000), 1 / (grid_res * 1000), 1.0] if scale_inputs else [1.0, 1.0, 1.0]
             if self.verbose:
-                print(f"removing observations from: {hold_out} for date: {date}")
+                print(f"using these values to scale_inputs: {scale_inputs}")
 
-            for ho in hold_out:
-                print(f"removing: {ho} data")
-                # get the location of the hold_out (sat)
-                sat_loc = np.in1d(self.obs['dims']['sat'], ho)
-                date_loc = np.in1d(self.obs['dims']['date'], date)
-                # set the observations at the hold out location to nan
-                obs[:, :, sat_loc, date_loc] = np.nan
+        if isinstance(scale_outputs, bool):
+            scale_outputs = 100. if scale_outputs else 1.
+            if self.verbose:
+                print(f"using these values to scale_outputs: {scale_outputs}")
+
+        assert len(scale_inputs) == 3, "scale_inputs expected to be length 3"
+
+        # HARDCODED: length scale bounds
+        # TODO: allow values to be specified by user
+        if bound_length_scales:
+            # NOTE: input scaling will happen in model build (for engine: GPflow)
+            ls_lb = np.zeros(len(scale_inputs))
+            ls_ub = np.array([(2 * incl_rad * 1000),
+                          (2 * incl_rad * 1000),
+                          (days_behind + days_ahead + 1)])
+
+            if self.verbose:
+                print(f"length scale:\nlower bounds: {ls_lb}\nupper bounds: {ls_ub}")
+
+        else:
+            ls_lb, ls_ub = None, None
+
+        # -
+        # results dir
+        # -
+
+        # TODO: tidy up how the sub-directory gets added to output dir
+        # results_dir = output_dir
+
+        # subdirectory in results dir, with name containing (some) run parameters
+        hold_out_str = "" if hold_out is None else '|'.join(hold_out)
+        tmp_dir = f"radius{incl_rad}_daysahead{days_ahead}_daysbehind{days_behind}_gridres{grid_res}_season{season}_coarsegrid{coarse_grid_spacing}_holdout{hold_out_str}_boundls{bound_length_scales}"
+
+        print(f"will write results to subdir of output_dir:\n {tmp_dir}")
+        output_dir = os.path.join(output_dir, tmp_dir)
+        os.makedirs(output_dir, exist_ok=True)
+
+        # ---
+        # run info
+        # ---
+
+        # run time info
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        run_info = {
+            "run_datetime": now
+        }
+
+        # add git_info
+        try:
+            run_info['git_info'] = get_git_information()
+        except subprocess.CalledProcessError:
+            print("issue getting git_info, check current working dir")
+            pass
+
+        config["run_info"] = run_info
+
+        # ---
+        # write config to file - will end up doing this for each date
+        # ---
+
+        config.pop('self')
+        with open(os.path.join(output_dir, config_file), "w") as f:
+            json.dump(config, f, indent=4)
+
+        # record time to run
+        t_total0 = time.time()
 
         # ----
-        # de-mean:
+        # for each date: select data used to build GP
         # ----
 
-        # TODO: should have a prior mean method, should return an array aligned (broadcast-able)
-        #  with obs so can easily de-mean
-        # TODO: wrap getting first year sea ice into a method, make it part of aux data, or its own?
+        all_res = []
+        all_preds = []
 
-        datapath = get_data_path()
-        # TODO: make sure dates are aligned to satellite data, read in same way
-        cs2_FYI = np.load(
-            datapath + f'/aux/CS2_{self.grid_res}_FYI_20181101-20190428.npy')
-        # create an array of dates
-        cs2_FYI_dates = np.arange(np.datetime64("2018-11-01"), np.datetime64("2019-04-29"))
-        cs2_FYI_dates = np.array([re.sub("-", "", i) for i in cs2_FYI_dates.astype(str)])
+        # for date in dates:
+        print(f"date: {date}")
+        # --
+        # date directory and file name
+        # --
 
-        # mean = np.nanmean(cs2_FYI[..., (day - days_behind):(day + days_ahead + 1)]).round(4)
-        # TODO: should have checks that range is valid here
-        print("using CS2_FYI data for prior mean")
-        cday = np.where(np.in1d(cs2_FYI_dates, date))[0][0]
-        # TODO: should this be trailing 31 days?
-        # mean = np.nanmean(cs2_FYI[..., (cday - days_behind):(cday + days_ahead + 1)]).round(4)
-        mean = np.nanmean(cs2_FYI[..., (cday - (days_behind + days_ahead + 1)):cday]).round(4)
+        date_dir = os.path.join(output_dir, date)
+        os.makedirs(date_dir, exist_ok=True)
+
+        # results will be written to file
+        warnings.warn("results, prediction files hardcoded")
+        res_file = os.path.join(date_dir, result_file)
+        pred_file = os.path.join(date_dir, prediction_file)
+        # bad results will be written to
+        skip_file = os.path.join(date_dir, skipped_file)
+
+        # ---
+        # move files to archive, if they already exist
+        # ---
+
+        # TODO: allow for appending to existing data
+        #  - allow to read in existing data then check if grid_loc already exists
+
+        warnings.warn("moving hardcoded values to config")
+        move_to_archive(top_dir=date_dir,
+                        file_names=[config_file,
+                                    result_file,
+                                    prediction_file,
+                                    skipped_file],
+                        suffix=f"_{now}",
+                        verbose=True)
+
+        # ---
+        # write config to file - will end up doing this for each date
+        # ---
+
+        with open(os.path.join(date_dir, config_file), "w") as f:
+            json.dump(config, f, indent=4)
+
+        # -------
+        # hyper parameters for date (optionally post-processed if read from else where)
+        # -------
+
+        post_process["prev_results_dir"] = post_process.get("prev_results_dir", output_dir)
+        post_process["prev_results_file"] = post_process.get("prev_results_file", None)
+
+        hp_date = self.post_process(date=date,
+                                    grid_res=grid_res,
+                                    std=50/grid_res,
+                                    **post_process)
+
+        # --
+        # select data for given date
+        # --
+
+        # TODO: allow prior mean method to be specified differently
+        self.select_data_for_given_date(date=date,
+                                        days_ahead=days_ahead,
+                                        days_behind=days_behind,
+                                        hold_out=hold_out,
+                                        prior_mean_method="fyi_average",
+                                        min_sie=None)
 
         # ----
-        # calculate a GP for each location in select_bool
+        # locations to calculate GP on
         # ----
 
-        num_loc = select_bool.sum()
-        select_loc = np.where(select_bool)
+        gp_locs = self.select_gp_locations(date=date,
+                                           min_sie=min_sie,
+                                           coarse_grid_spacing=coarse_grid_spacing,
+                                           sat_names=hold_out if pred_on_hold_out else None)
+        select_loc = np.where(gp_locs)
 
-        # for each location
+        # ---
+        # for each location to optimise GP
+        # ---
+
+        num_loc = gp_locs.sum()
+        print(f"will calculate GPs at: {num_loc} locations")
+
+        # TODO: review why self.verbose is set to 0 here
+        # self.verbose = 0
         for i in range(num_loc):
 
             if (i % 100) == 0:
                 print("*" * 75)
                 print(f"{i + 1}/{num_loc + 1}")
 
-            # ----
-            # get the input and output data for model
-            # ----
+            t0 = time.time()
+            # ---
+            # select location
+            # ---
 
             grid_loc = select_loc[0][i], select_loc[1][i]
-            x_ = self.aux['x'][grid_loc]
-            y_ = self.aux['y'][grid_loc]
+            x_ = self.aux['x'].vals[grid_loc]
+            y_ = self.aux['y'].vals[grid_loc]
 
-            # TODO: here could allow for obs to be a dict of the subset of all, which could then be
-            #  - have mean removed?
+            # alternatively could use
+            # x_ = self.obs.dims['x'][grid_loc[1]]
+            # y_ = self.obs.dims['y'][grid_loc[0]]
 
-            inputs, outputs = self.select_data_for_date_location(date=date,
-                                                                 obs=obs,
-                                                                 x=x_,
-                                                                 y=y_,
-                                                                 days_ahead=days_ahead,
-                                                                 days_behind=days_behind,
-                                                                 incl_rad=incl_rad)
+            # select inputs for a given location
+            inputs, outputs = self.select_input_output_from_obs_date(x=x_,
+                                                                     y=y_,
+                                                                     incl_rad=incl_rad)
+
+            # TODO: move this into a method
+            # too few inputs?
+            if len(inputs) < min_inputs:
+                # print("too few inputs")
+                tmp = pd.DataFrame({"grid_loc_0": grid_loc[0],
+                                    "grid_loc_1": grid_loc[1],
+                                    "reason": f"had only {len(inputs)} inputs"},
+                                   index=[i])
+
+                tmp.to_csv(skip_file, mode='a',
+                           header=not os.path.exists(skip_file),
+                           index=False)
+                continue
+
+            # ---
+            # get hyper parameters - for the given date and location
+            # ---
+            # hps = hyper_params_for_date_and_grid_loc(res, date, grid_loc,
+            #                                          ls_order=ls_order)
+
+            # get the length scale order
+            ls_order = [f"ls_{i}" for i in self.length_scale_name]
+            hps = self.hyper_params_for_date_and_grid_loc(hp_date, date, grid_loc,
+                                                          ls_order=ls_order)
+
+            if np.isnan(hps['kernel_variance']):
+                if self.verbose:
+                    print(f'kernel_variance is nan, skipping this (grid) location: {grid_loc}')
+                continue
 
             # ---
             # build a GPR model for data
             # ---
 
-            sifb.build_gpr(inputs=inputs,
-                           outputs=outputs - mean,
-                           scale_inputs=[1 / (grid_res * 1000), 1 / (grid_res * 1000), 1.0],
-                           # scale_outputs=1 / 100,
+            self.build_gpr(inputs=inputs,
+                           outputs=outputs,
+                           scale_inputs=scale_inputs,
+                           scale_outputs=scale_outputs,
+                           length_scales=hps['length_scales'],
+                           kernel_var=hps['kernel_variance'],
+                           likeli_var=hps['likelihood_variance'],
+                           length_scale_lb=ls_lb,
+                           length_scale_ub=ls_ub,
                            engine=engine,
-                           # mean=0,
-                           # length_scales=None,
-                           # kernel_var=None,
-                           # likeli_var=None,
-                           # kernel="Matern32",
-                           # length_scale_lb=None,
-                           # length_scale_ub=None,
-                           # scale_outputs=1.0,
-                           )
+                           kernel=kernel,
+                           mean_function=mean_function)
 
             # ---
             # get the hyper parameters
             # ---
 
-            hps = sifb.get_hyperparameters(scale_hyperparams=False)
+            # hps = self.get_hyperparameters(scale_hyperparams=False)
 
             # ---
             # optimise model
             # ---
 
-            # key-word arguments for optimisation (used by PurePython implementation)
-            kwargs = {}
-            if engine == "PurePython":
-                kwargs = {
-                    "jac": True,
-                    "opt_method": "CG"
-                }
-                # TODO: determine what is the preferable optimisation parameters (kwargs)
-                # kwargs = {
-                #     "jac": False,
-                #     "opt_method": "L-BFGS-B"
-                # }
+            if optimise:
+                t0_opt = time.time()
+                opt_hyp = self.optimise(scale_hyperparams=False)
+                t1_opt = time.time()
+                opt_runtime = t1_opt - t0_opt
+            else:
+                if self.verbose > 1:
+                    print("not optimising hyper parameters")
+                opt_hyp = self.get_hyperparameters(scale_hyperparams=False)
+                opt_hyp["marginal_loglikelihood"] = self.get_marginal_log_likelihood()
+                opt_hyp["optimise_success"] = np.nan
+                opt_runtime = np.nan
 
-            opt_hyp = sifb.optimise(scale_hyperparams=False, **kwargs)
-            res[engine]["opt_hyp"] = opt_hyp
+            t1 = time.time()
+
+            # ---
+            # get the marginal log likelihood
+            # --
+
+            # mll = self.get_marginal_log_likelihood()
 
             # ---
             # make predictions
             # ---
 
-            preds = sifb.predict_freeboard(lon=lon, lat=lat)
-            res[engine]["pred"] = preds
+            # TODO: predict in region around center point
+            x_pred, y_pred, gl0, gl1 = self.get_neighbours_of_grid_loc(grid_loc,
+                                                                       coarse_grid_spacing=coarse_grid_spacing)
+
+            preds = self.predict_freeboard(x=x_pred,
+                                           y=y_pred)
+
+            # ----
+            # store values in DataFrame
+            # ---
+
+            # TODO: storing values in dict/ DAtaFrame should be tidied up
+            t2 = time.time()
+            preds['grid_loc_0'] = grid_loc[0]
+            preds['grid_loc_1'] = grid_loc[1]
+            preds["proj_loc_0"] = gl0
+            preds["proj_loc_1"] = gl1
+            # TODO: this needs to be more robust to handle different mean priors
+            preds['fyi_mean'] = self.mean.vals[gl0, gl1]
+            # TODO: getting mean is quite hard coded -
+            preds['mean'] = self.mean.vals[gl0, gl1] + opt_hyp.get("mean_func_c", 0)
+
+            preds['date'] = date
+
+            # the split the test values per dimension
+            xs = preds.pop('xs')
+            for i in range(xs.shape[1]):
+                preds[f'xs_{self.length_scale_name[i]}'] = xs[:, i]
+
+            preds['run_time'] = t2 - t1
+
+            # ----
+            # store results (parameters) and predictions
+            # ----
+
+            ln, lt = EASE2toWGS84_New(x_, y_)
+
+            # store predictions at 'center' location in results
+            center_loc_bool = (preds['proj_loc_0'] == preds['grid_loc_0']) & (preds['proj_loc_1'] == preds['grid_loc_1'])
+
+            center_pred = {_: preds[_][center_loc_bool]
+                           for _ in ["f*", "f*_var", "y_var", "mean", "fyi_mean"]}
+            # center_pred['mean'] = preds['mean']
+            # center_pred['fyi_mean'] = preds['fyi_mean']
+
+            res = {
+                "date": date,
+                "x_loc": x_,
+                "y_loc": y_,
+                "lon": ln,
+                "lat": lt,
+                "grid_loc_0": grid_loc[0],
+                "grid_loc_1": grid_loc[1],
+                "num_inputs": len(inputs),
+                "output_mean": np.mean(outputs),
+                "output_std": np.std(outputs),
+                **center_pred,
+                **opt_hyp,
+                "run_time": t1 - t0,
+                "opt_runtime": opt_runtime,
+                **{f"scale_{self.length_scale_name[i]}": si
+                    for i, si in enumerate(self.scale_inputs)},
+                "scale_output": self.scale_outputs
+            }
+
+            # store in dataframe - for easy writing / appending to file
+            rdf = pd.DataFrame(res, index=[i])
+            pdf = pd.DataFrame(preds)
+
+            if append_to_file:
+                # append results to file
+                rdf.to_csv(res_file, mode="a", header=not os.path.exists(res_file),
+                           index=False)
+                pdf.to_csv(pred_file, mode="a", header=not os.path.exists(pred_file),
+                           index=False)
+
+            all_res.append(rdf)
+            all_preds.append(pdf)
+
+        all_res = pd.concat(all_res)
+        all_preds = pd.concat(all_preds)
+
+        # --
+        # total run time
+        # --
+
+        t_total1 = time.time()
+        print(f"total run time: {t_total1 - t_total0:.2f}")
+
+        with open(os.path.join(output_dir, "total_runtime.txt"), "+w") as f:
+            f.write(f"runtime: {t_total1 - t_total0:.2f} seconds")
+
+        return all_res, all_preds
+
 
 
 if __name__ == "__main__":
