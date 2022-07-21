@@ -1041,7 +1041,7 @@ class SeaIceFreeboard(DataLoader):
             if self.verbose:
                 print("in post_process: prev_result is None, will use naive hyper parameters")
             hp_date = self.hyper_params_for_date(date=date, prev_res=None,
-                                                 dims=self.aux['x'].dims,
+                                                 dims=self.aux['x'].dims.copy(),
                                                  length_scale_name=self.length_scale_name)
 
         elif isinstance(prev_results_file, dict):
@@ -1126,7 +1126,8 @@ class SeaIceFreeboard(DataLoader):
             bound_length_scales=True,
             mean_function=None,
             file_suffix="",
-            post_process=None):
+            post_process=None,
+            print_every=100):
         """
         wrapper function to run optimal interpolation of sea ice freeboard for a given date
         """
@@ -1328,7 +1329,7 @@ class SeaIceFreeboard(DataLoader):
         # self.verbose = 0
         for i in range(num_loc):
 
-            if (i % 100) == 0:
+            if (i % print_every) == 0:
                 print("*" * 75)
                 print(f"{i + 1}/{num_loc + 1}")
 
