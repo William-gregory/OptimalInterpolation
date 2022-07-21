@@ -969,7 +969,8 @@ class SeaIceFreeboard(DataLoader):
             if 'date' not in dims:
                 dims['date'] = np.array([date])
 
-            ls_keys = [k for k in length_scale_name if re.search('^ls', k)]
+            # ls_keys = [k for k in length_scale_name if re.search('^ls', k)]
+            ls_keys = [f"ls_{k}" for k in length_scale_name]
             var_keys = ['kernel_variance', "likelihood_variance"]
             for _ in ls_keys + var_keys:
                 # NOTE: this could be inefficient if dates in dim is big

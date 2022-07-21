@@ -14,9 +14,7 @@ from OptimalInterpolation.utils import EASE2toWGS84_New, get_git_information, mo
 
 if __name__ == "__main__":
 
-    t_total0 = time.time()
-
-    output_base_dir = get_path()
+    output_base_dir = get_path("results")
 
     # ---
     # input config
@@ -25,12 +23,14 @@ if __name__ == "__main__":
     config = {
         "dates": ["20181201"],  # , "20190101", "20190201", "20190301"],
         "optimise": True,
+        "file_suffix": "",
+        "output_dir": os.path.join(output_base_dir, "test"),
         "inclusion_radius": 300,
         "days_ahead": 4,
         "days_behind": 4,
         "data_dir": "package",
         "season": "2018-2019",
-        "grid_res": 25,
+        "grid_res": 50,
         "coarse_grid_spacing": 5,
         "min_inputs": 5,
         "verbose": 1,
@@ -43,12 +43,10 @@ if __name__ == "__main__":
         "scale_outputs": False,
         "bound_length_scales": False,
         "append_to_file": True,
-        "output_dir": os.path.join(output_base_dir, "test"),
-        "file_suffix": "",
         "post_process": {
-            "prev_results": None,
+            "prev_results_dir": None,
+            "prev_results_file": None,
             "clip_and_smooth": False,
-            "engine": "GPflow",
             "vmax_map": {
                 "ls_x": 2 * 300 * 1000,
                 "ls_y": 2 * 300 * 1000,
@@ -161,3 +159,4 @@ if __name__ == "__main__":
                  mean_function=mean_function,
                  file_suffix=file_suffix,
                  post_process=post_process_config)
+

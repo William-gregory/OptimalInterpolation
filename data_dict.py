@@ -61,13 +61,15 @@ def match(x, y):
 
 class DataDict(dict):
 
-    def __init__(self, vals, dims=None, name=None, is_flat=False):
+    def __init__(self, vals, dims=None, name=None, is_flat=False, default_dim_name="idx"):
         assert isinstance(vals, np.ndarray), f"vals expected to be np.ndarray, got {type(vals)}"
         assert isinstance(dims, (dict, type(None))), f"dims expected to be np.ndarray, got {type(dims)}"
 
         # if dims not provided, default to numbered idx values
         if dims is None:
-            dims = {f"idx{i}": np.arange(s) for i, s in enumerate(vals.shape)}
+            if default_dim_name is None:
+                default_dim_name = "idx"
+            dims = {f"{default_dim_name}{i}": np.arange(s) for i, s in enumerate(vals.shape)}
 
         # make all the dims values be np.arrays
         for k in dims.keys():
@@ -636,7 +638,7 @@ class DataDict(dict):
         return out
 
     @staticmethod
-    def full(shape=None, dims=None, fill_val=None, name=None, dtype=None):
+    def full(shape=None, dims=None, fill_val=None, name=None, dtype=None, default_dim_name=None):
         """create an array 'full' of fill_value"""
 
         if shape is None:
@@ -648,7 +650,7 @@ class DataDict(dict):
         if dtype is not None:
             vals = vals.astype(dtype)
 
-        return DataDict(vals=vals, dims=dims, name=name, is_flat=len(shape)==1)
+        return DataDict(vals=vals, dims=dims, name=name, is_flat=len(shape)==1, default_dim_name=default_dim_name)
 
 
 if __name__ == "__main__":

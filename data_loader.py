@@ -179,7 +179,7 @@ class DataLoader():
         self.aux = aux_dict
         # self.aux = {p: np.load(os.path.join(aux_data_dir, f"{pre_prefix}{p}_{grid_res}.npy"))
         #             for p in prefix_list}
-        self.aux = {k: DataDict(vals=v)
+        self.aux = {k: DataDict(vals=v, default_dim_name="grid_loc_")
                     for k, v in self.aux.items()}
 
         if get_bin_center:
@@ -250,8 +250,8 @@ class DataLoader():
         cs2_FYI_dates = np.arange(np.datetime64("2018-11-01"), np.datetime64("2019-04-29"))
         cs2_FYI_dates = np.array([re.sub("-", "", i) for i in cs2_FYI_dates.astype(str)])
 
-        self.fyi = DataDict(cs2_FYI)
-        self.fyi.set_dim_idx(dim_idx="idx2", new_idx="date", dim_vals=cs2_FYI_dates)
+        self.fyi = DataDict(cs2_FYI, default_dim_name="grid_loc_")
+        self.fyi.set_dim_idx(dim_idx="grid_loc_2", new_idx="date", dim_vals=cs2_FYI_dates)
 
     @classmethod
     def move_to_bin_center_get_lon_lat(self, x, y, legacy_projection=False):
@@ -265,10 +265,10 @@ class DataLoader():
             lon, lat = EASE2toWGS84_New(xnew, ynew)
 
         out = {
-            "lon": DataDict(lon),
-            "lat": DataDict(lat),
-            "x": DataDict(xnew),
-            "y": DataDict(ynew)
+            "lon": DataDict(lon, default_dim_name="grid_loc_"),
+            "lat": DataDict(lat, default_dim_name="grid_loc_"),
+            "x": DataDict(xnew, default_dim_name="grid_loc_"),
+            "y": DataDict(ynew, default_dim_name="grid_loc_")
         }
         return out
 
