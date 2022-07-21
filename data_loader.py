@@ -664,15 +664,16 @@ class DataLoader():
         rdf = pd.concat(res_list)
         rdf['date'] = rdf['date'].astype(str)
 
-        miss_data_cols = np.array(data_cols)[~np.in1d(data_cols, rdf.columns)]
+        if data_cols is not None:
+            miss_data_cols = np.array(data_cols)[~np.in1d(data_cols, rdf.columns)]
 
-        assert len(miss_data_cols) == 0, f"data_cols: {miss_data_cols} not in data"
+            assert len(miss_data_cols) == 0, f"data_cols: {miss_data_cols} not in data"
 
         dim_cols = ["grid_loc_0", "grid_loc_1", "date"]
         dims = {dc: rdf[dc].values for dc in dim_cols}
 
         dd = {dc: DataDict(vals=rdf[dc].values, dims=dims, is_flat=True, name=dc)
-              for dc in data_cols}
+              for dc in rdf.columns if dc not in dims }
 
         # unflatten data - put into cube
         if unflatten:

@@ -1254,7 +1254,7 @@ class SeaIceFreeboard(DataLoader):
         os.makedirs(date_dir, exist_ok=True)
 
         # results will be written to file
-        warnings.warn("results, prediction files hardcoded")
+
         res_file = os.path.join(date_dir, result_file)
         pred_file = os.path.join(date_dir, prediction_file)
         # bad results will be written to
@@ -1267,7 +1267,7 @@ class SeaIceFreeboard(DataLoader):
         # TODO: allow for appending to existing data
         #  - allow to read in existing data then check if grid_loc already exists
 
-        warnings.warn("moving hardcoded values to config")
+
         move_to_archive(top_dir=date_dir,
                         file_names=[config_file,
                                     result_file,
@@ -1580,6 +1580,11 @@ class SeaIceFreeboard(DataLoader):
         # ---
         # combine dicts
         # ---
+
+        #
+        common_keys = np.intersect1d(list(res.keys()), list(pre.keys()))
+        for ck in common_keys:
+            pre[ck+"_pred"] = pre.pop(ck)
 
         out = {**res, **pre}
 
