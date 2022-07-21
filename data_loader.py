@@ -32,8 +32,8 @@ class DataLoader():
         self.verbose = verbose
 
         #
-        self.aux = None,
-        self.obs = None,
+        self.aux = None
+        self.obs = None
         self.sie = None
 
         # if sat_data_dir is None:
@@ -206,7 +206,8 @@ class DataLoader():
                   season=None,
                   **kwargs):
 
-
+        if isinstance(grid_res, (int, float)):
+            grid_res = f"{int(grid_res)}km"
 
         self.load_aux_data(aux_data_dir=aux_data_dir,
                            season=season,

@@ -11,6 +11,8 @@ import datetime
 import time
 import subprocess
 
+from scipy.stats import shapiro, norm
+
 import tensorflow as tf
 import tensorflow_probability as tfp
 
@@ -1523,6 +1525,202 @@ class SeaIceFreeboard(DataLoader):
 
         return all_res, all_preds
 
+    def get_results_from_dir(self,
+                             res_dir,
+                             dates=None,
+                             results_file="results.csv",
+                             predictions_file="prediction.csv",
+                             file_suffix="",
+                             big_grid_size=360,
+                             results_data_cols=None,
+                             preds_data_cols=None
+                             ):
+        """a wrapper for read_results, getting both data from results_file and predictions
+        outputs combined with input_config"""
+        # TODO: remove commented sections of code below, and un used inputs
+        # get the config file to determine how it was created
+        with open(os.path.join(res_dir, f"input_config{file_suffix}.json"), "r") as f:
+            config = json.load(f)
+
+        # --
+        # extract parameters
+        # --
+
+        # TODO: in get_results_from_dir can more parameters be fetched from config?
+        grid_res = config['grid_res']
+
+        # --
+        # read results - hyper parameters values, log likelihood
+        # --
+
+        res = self.read_results(res_dir,
+                                file=results_file,
+                                grid_res_loc=grid_res,
+                                grid_size=big_grid_size,
+                                unflatten=True,
+                                dates=dates, file_suffix=file_suffix,
+                                data_cols=results_data_cols)
+
+        # --
+        # read predictions - f*, f*_var, etc
+        # --
+
+        # TODO: at some point this will not be needed because  f*, f*_var, etc
+        #  is now stored in 'results' (i.e. with hyper parameter)
+        pre = self.read_results(res_dir,
+                                file=predictions_file,
+                                grid_res_loc=grid_res,
+                                grid_size=big_grid_size,
+                                unflatten=True,
+                                dates=dates,
+                                file_suffix=file_suffix,
+                                data_cols=preds_data_cols)
+
+        # ---
+        # combine dicts
+        # ---
+
+        out = {**res, **pre}
+
+        out['input_config'] = config
+
+        # out['lon_grid'] = sifb.aux['lon']
+        # out['lat_grid'] = sifb.aux['lat']
+
+        return out
+
+
+    def cross_validation_results(self,
+                                 prev_results=None,
+                                 prev_results_dir=None,
+                                 hold_out=None,
+                                 add_mean=True,
+                                 load_data=False,
+                                 **kwargs):
+        """cross validation results
+        - kwargs are for get_results_from_dir()"""
+
+        if prev_results is None:
+            assert prev_results_dir is not None
+            prev_results = self.get_results_from_dir(
+                res_dir=prev_results_dir,
+                **kwargs)
+
+        assert isinstance(prev_results, dict)
+        assert "f*" in prev_results
+        assert "y_var" in prev_results
+
+        config = prev_results['input_config']
+
+        if hold_out is None:
+            hold_out = config['hold_out']
+
+        # load data
+        if load_data:
+            grid_res = config['grid_res']
+            season = config['season']
+            data_dir = config['data_dir']
+
+            if data_dir == "package":
+                data_dir = get_data_path()
+
+            assert os.path.exists(data_dir)
+
+            self.load_data(aux_data_dir=os.path.join(data_dir, "aux"),
+                           sat_data_dir=os.path.join(data_dir, "CS2S3_CPOM"),
+                           grid_res=grid_res,
+                           season=season)
+
+        assert self.obs is not None, "obs attribute is None, please make sure correct observations are loaded"
+
+        # ---
+        # evaluate predictions
+        # ---
+
+        # store results in list
+        z_list = []
+        dif_list = []
+        stat_list = []
+
+        for date in prev_results['f*'].dims['date']:
+
+            print(date)
+
+            # select prediction data
+            select_dims = {"date": date}
+            fs = prev_results['f*'].subset(select_dims)
+            if add_mean:
+                assert 'mean' in prev_results
+                fs = fs + prev_results['mean'].subset(select_dims)
+
+            y_var = prev_results['y_var'].subset(select_dims)
+
+            # date_dims = fs.dims
+
+            # extract numpy array, squeeze date dim
+            fs = np.squeeze(fs.vals)
+            y_var = np.squeeze(y_var.vals)
+
+            # evaluate each held out satellite data
+            z_tmp = []
+            dif_tmp = []
+            for ho in hold_out:
+                # select the data for a held out satellite data
+                hold_dims = {"date": date, "sat": ho}
+                obs = self.obs.subset(hold_dims)
+                obs = np.squeeze(obs.vals)
+
+                # get the difference
+                dif = (obs - fs)
+                # normalised
+
+                z = dif / np.sqrt(y_var)
+                # test statistic
+                # TODO: add more test statistics for cross val?
+                z_non_nan = ~np.isnan(z)
+                c = shapiro(z[z_non_nan])
+                # the log likelihood of the z measurements
+                # - z assumed to standard normal
+                ll_z = norm.logpdf(z[z_non_nan])
+                # log likelihood with variable sigma (variance)
+                ll = norm.logpdf(dif[z_non_nan],
+                                 loc=0,
+                                 scale=np.sqrt(y_var[z_non_nan]))
+
+                stats = {
+                    "date": date,
+                    "sat": ho,
+                    "shapiro_statistic": c.statistic,
+                    "shaprio_pvalue": c.pvalue,
+                    "log_likelihood": ll.sum(),
+                    # "log_likelihood_z": ll_z.sum(),
+                    "num_obs": z_non_nan.sum()
+                }
+                stat_list.append(stats)
+
+                # store the differences as DataDicts, then in list
+                _ = DataDict(vals=z, name=ho)
+                z_tmp.append(_)
+                _ = DataDict(vals=dif, name=ho)
+                dif_tmp.append(_)
+
+            # concatenate across the different satellites in hold_out (could just be 1)
+            _ = DataDict.concatenate(*z_tmp, dim_name='sat', name=date, verbose=False)
+            z_list.append(_)
+            _ = DataDict.concatenate(*dif_tmp, dim_name='sat', name=date, verbose=False)
+            dif_list.append(_)
+
+        # concatenate across dates
+        zdd = DataDict.concatenate(*z_list, dim_name='date', name='norm_diff')
+        difdd = DataDict.concatenate(*dif_list, dim_name='date', name="diff")
+
+        # return a dictionary of results
+        out = {
+            "stats": pd.DataFrame(stat_list),
+            "diff": difdd,
+            "z": zdd
+        }
+        return out
 
 
 if __name__ == "__main__":

@@ -532,11 +532,12 @@ class DataDict(dict):
         return int_dims
 
     @classmethod
-    def concatenate(cls, *obs, dim_name="new_dim", name=""):
+    def concatenate(cls, *obs, dim_name="new_dim", name="", verbose=True):
 
         # check all the dims match
         if len(obs) == 1:
-            print(f"only one object provided, will effectively just add dimension: {dim_name}")
+            if verbose:
+                print(f"only one object provided, will effectively just add dimension: {dim_name}")
             # return obs[0]
 
         # else:
