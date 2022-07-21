@@ -1122,6 +1122,7 @@ class SeaIceFreeboard(DataLoader):
             scale_inputs=False,
             scale_outputs=False,
             append_to_file=True,
+            overwrite=True,
             pred_on_hold_out=True,
             bound_length_scales=True,
             mean_function=None,
@@ -1269,13 +1270,22 @@ class SeaIceFreeboard(DataLoader):
         #  - allow to read in existing data then check if grid_loc already exists
 
 
-        move_to_archive(top_dir=date_dir,
-                        file_names=[config_file,
-                                    result_file,
-                                    prediction_file,
-                                    skipped_file],
-                        suffix=f"_{now}",
-                        verbose=True)
+        prior_rdf = pd.DataFrame(columns=["grid_loc_0", "grid_loc_1"])
+        if overwrite:
+            move_to_archive(top_dir=date_dir,
+                            file_names=[config_file,
+                                        result_file,
+                                        prediction_file,
+                                        skipped_file],
+                            suffix=f"_{now}",
+                            verbose=True)
+
+        else:
+            try:
+                prior_rdf = pd.read_csv(os.path.join(date_dir, result_file))
+                prior_rdf = prior_rdf[["grid_loc_0", "grid_loc_1"]]
+            except FileNotFoundError as e:
+                print(f"previous result_file: {result_file}")
 
         # ---
         # write config to file - will end up doing this for each date
@@ -1339,6 +1349,15 @@ class SeaIceFreeboard(DataLoader):
             # ---
 
             grid_loc = select_loc[0][i], select_loc[1][i]
+
+            # check
+            # could this be slow?
+            exists = (prior_rdf['grid_loc_0'] == grid_loc[0]) & (prior_rdf['grid_loc_1'] == grid_loc[1])
+            if exists.any():
+                if self.verbose > 2:
+                    print(f"grid_loc: {grid_loc} already has results, skipping")
+                continue
+
             x_ = self.aux['x'].vals[grid_loc]
             y_ = self.aux['y'].vals[grid_loc]
 
@@ -1512,9 +1531,14 @@ class SeaIceFreeboard(DataLoader):
             all_res.append(rdf)
             all_preds.append(pdf)
 
-        all_res = pd.concat(all_res)
-        all_preds = pd.concat(all_preds)
-
+        try:
+            all_res = pd.concat(all_res)
+            all_preds = pd.concat(all_preds)
+        except ValueError:
+            if self.verbose > 1:
+                print("no results to concatenate, will return None, None")
+            all_res = None
+            all_preds = None
         # --
         # total run time
         # --
