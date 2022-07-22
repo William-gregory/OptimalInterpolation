@@ -1201,7 +1201,13 @@ class SeaIceFreeboard(DataLoader):
         # results_dir = output_dir
 
         # subdirectory in results dir, with name containing (some) run parameters
-        hold_out_str = "" if hold_out is None else '|'.join(hold_out)
+        if hold_out is None:
+            hold_out_str = ""
+        elif isinstance(hold_out, str):
+            hold_out_str = hold_out
+        else:
+            hold_out_str = '|'.join(hold_out)
+        # hold_out_str = "" if hold_out is None else '|'.join(hold_out)
         tmp_dir = f"radius{incl_rad}_daysahead{days_ahead}_daysbehind{days_behind}_gridres{grid_res}_season{season}_coarsegrid{coarse_grid_spacing}_holdout{hold_out_str}_boundls{bound_length_scales}"
 
         print(f"will write results to subdir of output_dir:\n {tmp_dir}")
