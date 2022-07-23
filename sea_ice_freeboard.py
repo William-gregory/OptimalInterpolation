@@ -1762,7 +1762,19 @@ class SeaIceFreeboard(DataLoader):
             }
 
             # store in dataframe - for easy writing / appending to file
-            rdf = pd.DataFrame(res, index=[i])
+
+            # TEMP DEBUGGING FOR COLAB
+            try:
+                rdf = pd.DataFrame(res, index=[i])
+            except TypeError as e:
+                print("error in putting res into data Frame")
+                print(e)
+                print("res:")
+                print(res)
+                print(f"i: {i}")
+
+                assert False
+
             pdf = pd.DataFrame(preds)
 
             if append_to_file:
