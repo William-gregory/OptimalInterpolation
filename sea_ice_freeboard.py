@@ -792,7 +792,7 @@ class SeaIceFreeboard(DataLoader):
             out = self.model.log_marginal_likelihood().numpy()
         elif self.engine == "GPflow_svgp":
             # this is the ELBO - evidence lower bound on log likelihood
-            out = self.model.maximum_log_likelihood_objective((self.x, self.y))
+            out = self.model.maximum_log_likelihood_objective((self.x, self.y)).numpy()
         elif self.engine == "PurePython":
             out = self.model.get_loglikelihood()
 
