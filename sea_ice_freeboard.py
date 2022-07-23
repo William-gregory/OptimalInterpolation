@@ -2,6 +2,7 @@
 import re
 import os
 import json
+import copy
 import gpflow
 import numpy as np
 import pandas as pd
@@ -23,6 +24,7 @@ from OptimalInterpolation.utils import WGS84toEASE2_New, \
     EASE2toWGS84_New, SMLII_mod, SGPkernel, GPR, get_git_information, move_to_archive
 
 from gpflow.mean_functions import Constant
+from gpflow.utilities import parameter_dict
 
 
 class PurePythonGPR():
@@ -88,7 +90,6 @@ class PurePythonGPR():
         return SMLII_mod(hypers=hypers, x=x, y=y, approx=approx, M=M, grad=grad)
 
     def predict(self, xs, mean=0):
-
         ell = self.length_scales
         sf2 = self.kernel_var
         sn2 = self.likeli_var
@@ -110,22 +111,21 @@ class PurePythonGPR():
 
         out = {
             "f*": res[0].flatten(),
-            "f*_var": res[1]**2,
+            "f*_var": res[1] ** 2,
             "y": res[0].flatten(),
-            "y_var": res[1]**2 + self.likeli_var
+            "y_var": res[1] ** 2 + self.likeli_var
         }
         return out
 
 
-
 class SeaIceFreeboard(DataLoader):
-
     mean_functions = {
         "constant": Constant()
     }
 
     def __init__(self, grid_res="25km", sat_list=None, verbose=True,
-                 length_scale_name = None):
+                 length_scale_name=None,
+                 rng_seed=42):
 
         super().__init__(grid_res=grid_res,
                          sat_list=sat_list,
@@ -146,10 +146,13 @@ class SeaIceFreeboard(DataLoader):
         self.X_tree = None
         self.X_tree_data = None
         self.input_data_all = None
-        self.valid_gpr_engine = ["GPflow", "PurePython"]
+        self.valid_gpr_engine = ["GPflow", "PurePython", "GPflow_svgp"]
         self.engine = None
         self.input_params = {"date": "", "days_behind": 0, "days_ahead": 0}
         self.obs_date = None
+
+        # random number generator - used for selecting inducing points
+        self.rnd = np.random.default_rng(seed=rng_seed)
 
     def select_obs_date(self, date, days_ahead=4, days_behind=4):
         """select observation for a specific date, store as obs_date attribute"""
@@ -199,10 +202,9 @@ class SeaIceFreeboard(DataLoader):
             # store as data
             self.mean = DataDict(vals=np.zeros(self.obs.vals.shape[:2]), name="mean")
 
-
     def _prior_mean_fyi_ave(self, date, days_behind=9, days_ahead=-1):
         """calculate a trailing mean from first year sea ice data, in line with published paper"""
-        date_loc = match(date, self.fyi.dims['date']) + np.arange(-days_behind, days_ahead+1 )
+        date_loc = match(date, self.fyi.dims['date']) + np.arange(-days_behind, days_ahead + 1)
         assert np.min(date_loc) >= 0, f"had negative values in date_loc"
 
         # select a subset of the data
@@ -265,7 +267,6 @@ class SeaIceFreeboard(DataLoader):
 
         return x, y
 
-
     def select_input_output_from_obs_date(self,
                                           x=None,
                                           y=None,
@@ -287,7 +288,6 @@ class SeaIceFreeboard(DataLoader):
         outputs = self.X_tree_data.vals[ID]
 
         return inputs, outputs
-
 
     def data_select_for_date(self, date, obs=None, days_ahead=4, days_behind=4):
         """given a date, days_ahead and days_behind window
@@ -373,8 +373,6 @@ class SeaIceFreeboard(DataLoader):
         # build KD-tree
         self.build_kd_tree(min_sie=min_sie)
 
-
-
     def select_data_for_date_location(self, date,
                                       obs=None,
                                       x=None,
@@ -397,7 +395,7 @@ class SeaIceFreeboard(DataLoader):
         if not all(params_match):
 
             # select subset of date
-            date_loc = match(date, self.obs.dims['date']) + np.arange(-days_behind, days_ahead+1)
+            date_loc = match(date, self.obs.dims['date']) + np.arange(-days_behind, days_ahead + 1)
 
             obs_date = obs.subset(select_dims={"date": obs.dims['date'][date_loc]})
 
@@ -423,7 +421,6 @@ class SeaIceFreeboard(DataLoader):
 
         return inputs, outputs
 
-
     def build_gpr(self,
                   inputs,
                   outputs,
@@ -437,7 +434,9 @@ class SeaIceFreeboard(DataLoader):
                   scale_outputs=1.0,
                   scale_inputs=None,
                   mean_function=None,
-                  engine="GPflow"):
+                  engine="GPflow",
+                  min_obs_for_svgp=1000,
+                  **inducing_point_params):
 
         # TOD0: length scales and variances should be scaled in the same way as inputs /outputs
         # TODO: have a check / handle on the valid kernels
@@ -445,6 +444,8 @@ class SeaIceFreeboard(DataLoader):
 
         assert engine in self.valid_gpr_engine, f"method: {engine} is not in valid methods" \
                                                 f"{self.valid_gpr_engine}"
+
+        # min_obs_for_svgp = inducing_point_params.get('min_obs_for_svgp', 1000)
 
         # TODO: consider changing observation (y) to z to avoid confusion with x,y used elsewhere?
         self.x = inputs.copy()
@@ -507,6 +508,13 @@ class SeaIceFreeboard(DataLoader):
             print(f"kernel_var: {kernel_var}")
             print(f"likelihood_var: {likeli_var}")
 
+        # if the number of observations is to few Stochastic Variational
+
+        if (engine == "GPflow_svgp") & (len(self.x) <= min_obs_for_svgp):
+            if self.verbose > 1:
+                print("too few entries for 'GPflow_svgp', will use 'GPflow'")
+            engine = "GPflow"
+
         if engine == "GPflow":
             self.engine = engine
             self._build_gpflow(x=self.x,
@@ -518,6 +526,22 @@ class SeaIceFreeboard(DataLoader):
                                length_scale_ub=length_scale_ub,
                                mean_function=mean_function,
                                kernel=kernel)
+
+        elif engine == "GPflow_svgp":
+            self.engine = engine
+
+            # NOTE: y is not used
+            self._build_gpflow_svgp(x=self.x,
+                                    y=self.y,
+                                    length_scales=length_scales,
+                                    kernel_var=kernel_var,
+                                    likeli_var=likeli_var,
+                                    length_scale_lb=length_scale_lb,
+                                    length_scale_ub=length_scale_ub,
+                                    mean_function=mean_function,
+                                    kernel=kernel,
+                                    **inducing_point_params)
+
         elif engine == "PurePython":
             self.engine = engine
 
@@ -531,17 +555,17 @@ class SeaIceFreeboard(DataLoader):
                                 length_scale_ub=length_scale_ub,
                                 kernel=kernel)
 
-    def _build_gpflow(self,
-                      x,
-                      y,
-                      length_scales=1.0,
-                      kernel_var=1.0,
-                      likeli_var=1.0,
-                      length_scale_lb=None,
-                      length_scale_ub=None,
-                      kernel="Matern32",
-                      mean_function=None):
-
+    def _get_kernel_mean_function(self,
+                                  length_scales=1.0,
+                                  kernel_var=1.0,
+                                  length_scale_lb=None,
+                                  length_scale_ub=None,
+                                  kernel="Matern32",
+                                  mean_function=None
+                                  ):
+        """get kernel and mean_function which can be used by gpflow.models.GPR (_build_gpflow)
+        or gpflow.models.SVGP (_build_gpflow_svgp)
+        """
         # require the provide
         assert kernel in gpflow.kernels.__dict__['__all__'], f"kernel provide: {kernel} not value for GPflow"
 
@@ -558,7 +582,7 @@ class SeaIceFreeboard(DataLoader):
             # NOTE: using the class attribute likely will use the same object
             # - which lead the optimizer failing?
             if mean_function == 'constant':
-                mean_function = Constant(c=np.array([np.mean(y)]))
+                mean_function = Constant(c=np.array([np.mean(self.y)]))
             # mean_function = self.mean_functions[mean_function]
 
         # ---
@@ -588,6 +612,28 @@ class SeaIceFreeboard(DataLoader):
                                               prior=p.prior,
                                               name=p.name,
                                               transform=sig)
+
+        return k, mean_function
+
+    def _build_gpflow(self,
+                      x,
+                      y,
+                      length_scales=1.0,
+                      kernel_var=1.0,
+                      likeli_var=1.0,
+                      length_scale_lb=None,
+                      length_scale_ub=None,
+                      kernel="Matern32",
+                      mean_function=None):
+
+        # get the kernel and mean function
+        k, mean_function = self._get_kernel_mean_function(length_scales=length_scales,
+                                                          kernel_var=kernel_var,
+                                                          length_scale_lb=length_scale_lb,
+                                                          length_scale_ub=length_scale_ub,
+                                                          kernel=kernel,
+                                                          mean_function=mean_function)
+
         # ---
         # GPR Model
         # ---
@@ -596,6 +642,56 @@ class SeaIceFreeboard(DataLoader):
                               kernel=k,
                               mean_function=mean_function,
                               noise_variance=likeli_var)
+
+        self.model = m
+
+    def _build_gpflow_svgp(self,
+                           x,
+                           y,
+                           length_scales=1.0,
+                           kernel_var=1.0,
+                           likeli_var=1.0,
+                           length_scale_lb=None,
+                           length_scale_ub=None,
+                           kernel="Matern32",
+                           mean_function=None,
+                           inducing_variable=None,
+                           num_inducing_points=None,
+                           **kwargs):
+
+        # get the kernel and mean function
+        k, mean_function = self._get_kernel_mean_function(length_scales=length_scales,
+                                                          kernel_var=kernel_var,
+                                                          length_scale_lb=length_scale_lb,
+                                                          length_scale_ub=length_scale_ub,
+                                                          kernel=kernel,
+                                                          mean_function=mean_function)
+
+        # ---
+        # Stochastic Variational GP Model
+        # ---
+
+        if inducing_variable is not None:
+            # TODO: check inducing_variable has the correct properities
+            Z = inducing_variable
+
+        else:
+            if self.verbose > 1:
+                print("no inducing_variable provided, will pick ")
+            assert num_inducing_points is not None, f"num_inducing_points must be specified if inducing_variable is not"
+            if num_inducing_points > len(x):
+                print(f"num_inducing_points={num_inducing_points} is greater than\nlen(x)={len(x)}\nwill change to num_inducing_points")
+                num_inducing_points = len(x)
+
+            M_loc = self.rnd.choice(np.arange(len(x)), num_inducing_points, replace=False)
+            Z = x[M_loc, :]
+
+        N = len(x)
+        m = gpflow.models.SVGP(kernel=k,
+                               likelihood=gpflow.likelihoods.Gaussian(variance=likeli_var),
+                               inducing_variable=Z,
+                               mean_function=mean_function,
+                               num_data=N)
 
         self.model = m
 
@@ -632,7 +728,7 @@ class SeaIceFreeboard(DataLoader):
         assert self.engine in self.valid_gpr_engine, f"engine: {self.engine} is not valid"
 
         mean_func_params = {}
-        if self.engine == "GPflow":
+        if self.engine in ["GPflow", "GPflow_svgp"]:
             # TODO: if model has mean_function attribute specified, get parameter
             # length scales
             # TODO: determine here if want to change the length scale names
@@ -693,10 +789,10 @@ class SeaIceFreeboard(DataLoader):
 
         out = None
         if self.engine == "GPflow":
-            # out = {
-            #     "mll": self.model.log_marginal_likelihood().numpy()
-            # }
             out = self.model.log_marginal_likelihood().numpy()
+        elif self.engine == "GPflow_svgp":
+            # this is the ELBO - evidence lower bound on log likelihood
+            out = self.model.maximum_log_likelihood_objective((self.x, self.y))
         elif self.engine == "PurePython":
             out = self.model.get_loglikelihood()
 
@@ -730,6 +826,26 @@ class SeaIceFreeboard(DataLoader):
                 **hyp_params
             }
 
+        elif self.engine == "GPflow_svgp":
+
+            # TODO: let optimise kwargs provide arguments to _svgp_optimise
+            opt_logs = self._svgp_optimise(minibatch_size=100,
+                                           maxiter=20000,
+                                           train_inducing_points=False,
+                                           persistance=100,
+                                           early_stop=True,
+                                           save_best=False)
+
+            hyp_params = self.get_hyperparameters(scale_hyperparams=scale_hyperparams)
+            mll = self.get_marginal_log_likelihood()
+            out = {
+                "optimise_success": opt_logs['success'],
+                "marginal_loglikelihood": mll,
+                **hyp_params
+            }
+
+
+
         elif self.engine == "PurePython":
 
             success = self.model.optimise(**kwargs)
@@ -742,6 +858,121 @@ class SeaIceFreeboard(DataLoader):
             }
 
         return out
+
+    def _svgp_run_adam(self, model, iterations, train_dataset, minibatch_size,
+                       early_stop=True, persistance=100,
+                       save_best=False):
+        """
+        Utility function running the Adam optimizer
+
+        :param model: GPflow model
+        :param interations: number of iterations
+        """
+        # based off of:
+        # https://gpflow.github.io/GPflow/develop/notebooks/advanced/gps_for_big_data.html
+
+        # TODO: in this method should the full elbo be evaluated
+        #  - i.e. using full dataset
+        if save_best:
+            warnings.warn(f"save_best: {save_best}, this will likely slow process")
+
+        # REMOVE THIS?
+        # elbo = tf.function(model.elbo)
+
+        # Create an Adam Optimizer action
+        logf = []
+        train_iter = iter(train_dataset.batch(minibatch_size))
+        training_loss = model.training_loss_closure(train_iter, compile=True)
+        # TODO: add parameters for Adam
+        optimizer = tf.optimizers.Adam()
+
+        @tf.function
+        def optimization_step():
+            optimizer.minimize(training_loss, model.trainable_variables)
+
+        # initialise the maximum elbo
+        max_elbo = -np.inf
+        best_step = 0
+        stopped_early = False
+        # NOTE: need to use copy.deepcopy() - this could slow things down
+        params = parameter_dict(model)
+
+        for step in range(iterations):
+            optimization_step()
+            if step % 10 == 0:
+                # training_loss() will give the training_loss (negative elbo) for a given batch
+                elbo = -training_loss().numpy()
+                # check if new elbo estimate is larger than previous
+                if (elbo > max_elbo) & (early_stop):
+                    max_elbo = elbo
+                    max_count = 0
+                    # TODO: store parameters
+                    # - will this copy by reference? yes(?)
+
+                    best_step = step
+                    if save_best:
+                        params = copy.deepcopy(parameter_dict(model))
+                    # else:
+                    #     params = parameter_dict(model).copy()
+                else:
+                    max_count += 1
+                    if (max_count > persistance) & (early_stop):
+                        print("objective did not improve stopping")
+                        stopped_early = True
+                        break
+
+                logf.append(elbo)
+        return logf, params, best_step, stopped_early
+
+
+    def _svgp_optimise(self,
+                       minibatch_size=100,
+                       maxiter=20000,
+                       train_inducing_points=False,
+                       persistance=100,
+                       early_stop=True,
+                       save_best=False):
+        """"""
+        # TODO: tidy up _svgp_optimise
+
+        assert self.engine == "GPflow_svgp", f"engine={self.engine}, expected 'GPflow_svgp'"
+        # elbo = tf.function(self.model.elbo)
+
+        # data = (X, Y)
+        data = (self.x, self.y)
+
+        # tensor_data = tuple(map(tf.convert_to_tensor, data))
+
+        # %timeit elbo(tensor_data)
+
+        # minibatch_size = 100
+
+        # We turn off training for inducing point locations
+        gpflow.set_trainable(self.model.inducing_variable, train_inducing_points)
+
+        # train_dataset - copied from
+        N = len(self.x)
+        # TODO: review the impacts of repeat and shuffle on tf.Dataset
+        train_dataset = tf.data.Dataset.from_tensor_slices(data).repeat().shuffle(N)
+
+        # run adam optimizer
+        # TODO: add print statements (for a given verbose level)
+        logf, params, best_step, stopped_early = self._svgp_run_adam(model=self.model,
+                                                                     iterations=maxiter,
+                                                                     train_dataset=train_dataset,
+                                                                     minibatch_size=minibatch_size,
+                                                                     early_stop=early_stop,
+                                                                     persistance=persistance,
+                                                                     save_best=save_best)
+
+        if save_best:
+            gpflow.utilities.multiple_assign(self.model, params)
+
+        # consider a successful optimisation of stopped early (with early stop being on)
+        success = stopped_early if early_stop else np.nan
+        return {"success": success}
+
+
 
     def get_neighbours_of_grid_loc(self, grid_loc,
                                    coarse_grid_spacing=1,
@@ -765,7 +996,6 @@ class SeaIceFreeboard(DataLoader):
             return [_.flatten() for _ in out]
         else:
             return out
-
 
     def predict_freeboard(self, x=None, y=None, t=None, lon=None, lat=None):
         """predict freeboard at (x,y,t) or (lon,lat,t) location
@@ -801,7 +1031,7 @@ class SeaIceFreeboard(DataLoader):
         if len(xs.shape) == 1:
             if self.verbose:
                 print("xs is 1-d, broadcasting to 2-d")
-            xs = xs[None,:]
+            xs = xs[None, :]
         assert xs.shape[1] == self.x.shape[1], \
             f"dimension of test point(s): {xs.shape} is not aligned to x/input data: {self.x.shape}"
 
@@ -809,7 +1039,7 @@ class SeaIceFreeboard(DataLoader):
         xs *= self.scale_inputs
 
         out = {}
-        if self.engine == "GPflow":
+        if self.engine in ["GPflow", "GPflow_svgp"]:
             out = self._predict_gpflow(xs)
             # scale outputs
             # TODO: should this only be applied if
@@ -845,7 +1075,6 @@ class SeaIceFreeboard(DataLoader):
         # adding the mean back should happen else where
         return self.model.predict(xs, mean=0, **kwargs)
 
-
     def _float_list_to_array(self, x):
         # TODO: let _float_list_to_array just call to_array
         if isinstance(x, (float, int)):
@@ -854,7 +1083,6 @@ class SeaIceFreeboard(DataLoader):
             return np.array(x, dtype=float)
         else:
             return x
-
 
     def sat_obs_location_on_date(self,
                                  date,
@@ -896,7 +1124,6 @@ class SeaIceFreeboard(DataLoader):
 
         return sat_obs_loc_bool
 
-
     def select_gp_locations(self,
                             date=None,
                             min_sie=0.15,
@@ -915,8 +1142,8 @@ class SeaIceFreeboard(DataLoader):
             date = self.obs_date['date']
 
         assert self.sie is not None, f"require sie attribute to specified"
-        sie = self.sie.vals #['data']
-        sie_dates = self.sie.dims['date'] #['dims']['date']
+        sie = self.sie.vals  # ['data']
+        sie_dates = self.sie.dims['date']  # ['dims']['date']
 
         # default will be to calculate GPs for all points
         select_bool = np.ones(sie.shape[:2], dtype=bool)
@@ -1018,8 +1245,6 @@ class SeaIceFreeboard(DataLoader):
 
         return out
 
-
-
     def post_process(self,
                      date,
                      prev_results_file=None,
@@ -1032,7 +1257,7 @@ class SeaIceFreeboard(DataLoader):
                      big_grid_size=360):
 
         # TODO: add option to provide previous result directly to post_process - instead of reading in from file
-        assert  grid_res is not None, "grid_res needs to be specified"
+        assert grid_res is not None, "grid_res needs to be specified"
         assert not isinstance(prev_results_file, dict), "prev_result type: dict not yet implemented"
 
         assert isinstance(prev_results_file, (str, type(None)))
@@ -1098,11 +1323,12 @@ class SeaIceFreeboard(DataLoader):
                 # - be in 'post_process' config
                 for k in hp_date.keys():
                     hp_date[k] = hp_date[k].clip_smooth_by_date(nan_mask=sie_mask,
-                                                                vmin=vmin_map[k] if isinstance(vmin_map, dict) else None,
-                                                                vmax=vmax_map[k] if isinstance(vmax_map, dict) else None,
+                                                                vmin=vmin_map[k] if isinstance(vmin_map,
+                                                                                               dict) else None,
+                                                                vmax=vmax_map[k] if isinstance(vmax_map,
+                                                                                               dict) else None,
                                                                 std=std)
         return hp_date
-
 
     def run(self,
             date,
@@ -1128,11 +1354,13 @@ class SeaIceFreeboard(DataLoader):
             mean_function=None,
             file_suffix="",
             post_process=None,
-            print_every=100):
+            print_every=100,
+            inducing_point_params=None):
         """
         wrapper function to run optimal interpolation of sea ice freeboard for a given date
         """
 
+        # TODO: move min_obs_for_svgp into inducing_point_params
         # TODO: allow reading from previous results - for intialisation
 
         # res = sifb.read_results(results_dir, file="results.csv", grid_res_loc=grid_res, grid_size=big_grid_size,
@@ -1145,6 +1373,14 @@ class SeaIceFreeboard(DataLoader):
 
         if post_process is None:
             post_process = {}
+
+        if inducing_point_params is None:
+            inducing_point_params = {}
+
+        # TODO: refactor getting min_obs_for_svgp from inducing_point_params - review how it's used down stream
+        min_obs_for_svgp = inducing_point_params.get("min_obs_for_svgp", 1000)
+        if "min_obs_for_svgp" in inducing_point_params:
+            inducing_point_params.pop("min_obs_for_svgp")
 
         # ----
         # get the input parameters
@@ -1162,7 +1398,6 @@ class SeaIceFreeboard(DataLoader):
         # ---
         # modify / interpret parameters
         # ---
-
 
         # HARDCODED: the amount of scaling that is applied
         # TODO: allow this to be specified by user - do the default if scale_inputs=True
@@ -1184,8 +1419,8 @@ class SeaIceFreeboard(DataLoader):
             # NOTE: input scaling will happen in model build (for engine: GPflow)
             ls_lb = np.zeros(len(scale_inputs))
             ls_ub = np.array([(2 * incl_rad * 1000),
-                          (2 * incl_rad * 1000),
-                          (days_behind + days_ahead + 1)])
+                              (2 * incl_rad * 1000),
+                              (days_behind + days_ahead + 1)])
 
             if self.verbose:
                 print(f"length scale:\nlower bounds: {ls_lb}\nupper bounds: {ls_ub}")
@@ -1275,7 +1510,6 @@ class SeaIceFreeboard(DataLoader):
         # TODO: allow for appending to existing data
         #  - allow to read in existing data then check if grid_loc already exists
 
-
         prior_rdf = pd.DataFrame(columns=["grid_loc_0", "grid_loc_1"])
         if overwrite:
             move_to_archive(top_dir=date_dir,
@@ -1309,7 +1543,7 @@ class SeaIceFreeboard(DataLoader):
 
         hp_date = self.post_process(date=date,
                                     grid_res=grid_res,
-                                    std=50/grid_res,
+                                    std=50 / grid_res,
                                     **post_process)
 
         # --
@@ -1421,7 +1655,9 @@ class SeaIceFreeboard(DataLoader):
                            length_scale_ub=ls_ub,
                            engine=engine,
                            kernel=kernel,
-                           mean_function=mean_function)
+                           mean_function=mean_function,
+                           min_obs_for_svgp=min_obs_for_svgp,
+                           **inducing_point_params)
 
             # ---
             # get the hyper parameters
@@ -1496,7 +1732,8 @@ class SeaIceFreeboard(DataLoader):
             ln, lt = EASE2toWGS84_New(x_, y_)
 
             # store predictions at 'center' location in results
-            center_loc_bool = (preds['proj_loc_0'] == preds['grid_loc_0']) & (preds['proj_loc_1'] == preds['grid_loc_1'])
+            center_loc_bool = (preds['proj_loc_0'] == preds['grid_loc_0']) & (
+                        preds['proj_loc_1'] == preds['grid_loc_1'])
 
             center_pred = {_: preds[_][center_loc_bool]
                            for _ in ["f*", "f*_var", "y_var", "mean", "fyi_mean"]}
@@ -1514,12 +1751,13 @@ class SeaIceFreeboard(DataLoader):
                 "num_inputs": len(inputs),
                 "output_mean": np.mean(outputs),
                 "output_std": np.std(outputs),
+                "engine": self.engine,
                 **center_pred,
                 **opt_hyp,
                 "run_time": t1 - t0,
                 "opt_runtime": opt_runtime,
                 **{f"scale_{self.length_scale_name[i]}": si
-                    for i, si in enumerate(self.scale_inputs)},
+                   for i, si in enumerate(self.scale_inputs)},
                 "scale_output": self.scale_outputs
             }
 
@@ -1615,7 +1853,7 @@ class SeaIceFreeboard(DataLoader):
         #
         common_keys = np.intersect1d(list(res.keys()), list(pre.keys()))
         for ck in common_keys:
-            pre[ck+"_pred"] = pre.pop(ck)
+            pre[ck + "_pred"] = pre.pop(ck)
 
         out = {**res, **pre}
 
@@ -1625,7 +1863,6 @@ class SeaIceFreeboard(DataLoader):
         # out['lat_grid'] = sifb.aux['lat']
 
         return out
-
 
     def cross_validation_results(self,
                                  prev_results=None,
@@ -1892,4 +2129,3 @@ if __name__ == "__main__":
                     print(f"{ei:<10}:\t\t{vv}")
                     print(f"{ej:<10}:\t\t{res[ej][k][kk]}")
                     print(f"{'diff':<10}:\t\t{vv - res[ej][k][kk]}")
-
