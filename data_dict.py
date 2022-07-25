@@ -271,6 +271,12 @@ class DataDict(dict):
                 locs[k] = np.arange(len(self.dims[k]))
             else:
                 if self.flat:
+                    # require dims selecting are in self.dims
+                    select_dims_in_dims = np.in1d(np.unique(select_dims[k]), np.unique(self.dims[k]))
+                    assert select_dims_in_dims.all(), \
+                        f"select_dims - k={k} had values: {np.unique(select_dims[k])[~select_dims_in_dims]} not in dims"
+                    # TODO: here could look at unique values in dims[k] and
+                    #  - use a map to their locations, may require storing additional attributes
                     locs[k] = np.in1d(self.dims[k], select_dims[k])
                 else:
                     # TODO: is match needed here?
@@ -284,7 +290,7 @@ class DataDict(dict):
     def copy(self, new_name=None):
         """make a copy of object"""
         new_name = new_name if new_name is not None else self.name
-        return DataDict(vals=self.vals, dims=self.dims, name=new_name, is_flat=self.flat)
+        return DataDict(vals=self.vals.copy(), dims=self.dims.copy(), name=new_name, is_flat=self.flat)
 
     @staticmethod
     def dims_equal(dims1, dims2):
@@ -535,7 +541,8 @@ class DataDict(dict):
 
     @classmethod
     def concatenate(cls, *obs, dim_name="new_dim", name="", verbose=True):
-
+        # TODO: allow for concating along a single dimension, if others match
+        #  - basically adding new values for a given dimension val
         # check all the dims match
         if len(obs) == 1:
             if verbose:
