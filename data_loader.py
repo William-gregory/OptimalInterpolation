@@ -387,7 +387,8 @@ class DataLoader():
     def read_previous_data(self,
                            pkl_dir,
                            pkl_regex="\.pkl$",
-                           parse_file_name_func=None):
+                           parse_file_name_func=None,
+                           get_bin_center=False):
         # TODO: allow for only selected data to be read in, i.e. just 'interp' or 'ell_x'
 
         # read previously generated (pickle) data in
@@ -431,8 +432,8 @@ class DataLoader():
         # add a dims dict
         # HARDCODED: x,y values - should probably read them from file
         res['dims'] = {
-            "y":  np.arange(0, 8e6, 5e4),
-            "x": np.arange(0, 8e6, 5e4),
+            "y": 2.5e4 + np.arange(0, 8e6, 5e4) if get_bin_center else np.arange(0, 8e6, 5e4),
+            "x": 2.5e4 + np.arange(0, 8e6, 5e4) if get_bin_center else np.arange(0, 8e6, 5e4),
             "date": sort_dates
         }
 
@@ -542,7 +543,7 @@ class DataLoader():
             except Exception as e:
                 print(f"error on key: {ck}\nError:\n{e}")
                 keys_matched = False
-        if verbose:
+        if verbose & keys_matched:
             print("all keys matched")
         return keys_matched
 
@@ -585,7 +586,7 @@ class DataLoader():
         with open(config_file, "r") as f:
             config = json.load(f)
 
-        chk_keys = [k for k in config.keys() if k not in ["dates", "run_info"]]
+        chk_keys = [k for k in config.keys() if k not in ["dates", "date", "run_info"]]
 
         # get the dates in results dir - i.e. the date stamped directories
         date_dirs = np.sort([i for i in os.listdir(results_dir) if i.isdigit()])
