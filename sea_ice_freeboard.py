@@ -606,7 +606,19 @@ class SeaIceFreeboard(DataLoader):
                                         high=tf.constant(ls_ub))
             # TODO: determine if the creation / redefining of the Parameter below requires
             #  - as many parameters as given
+
+            # check if length scales are at bounds - move them off if they are
+            ls_scales = k.lengthscales.numpy()
+            if (ls_scales == ls_lb).any():
+                ls_scales[ls_scales == ls_lb] = ls_ub[ls_scales == ls_lb] + 1e-6
+            if (ls_scales == ls_ub).any():
+                ls_scales[ls_scales == ls_ub] = ls_ub[ls_scales == ls_ub] - 1e-6
+
+            # if the length scale values have changed then assign the new values
+            if (k.lengthscales.numpy() != ls_scales).any():
+                k.lengthscales.assign(ls_scales)
             p = k.lengthscales
+
             k.lengthscales = gpflow.Parameter(p,
                                               trainable=p.trainable,
                                               prior=p.prior,
