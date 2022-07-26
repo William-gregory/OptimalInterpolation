@@ -1120,6 +1120,8 @@ class SeaIceFreeboard(DataLoader):
         satellite observations exists (satellite names specified in sat_names)"""
         if sat_names is None:
             sat_names = []
+        if isinstance(sat_names, str):
+            sat_names = [sat_names]
 
         assert isinstance(sat_names, (list, tuple, np.ndarray)), f"sat_names should be list, tuple or ndarray"
 
@@ -1640,14 +1642,6 @@ class SeaIceFreeboard(DataLoader):
                                                                      y=y_,
                                                                      incl_rad=incl_rad)
 
-            # HACK: prior_mean_method == "demean_outputs"
-            # - here de-mean the outputs, the mean subtracted will depend on the points in radius
-            if prior_mean_method == "demean_outputs":
-                output_mean = np.mean(outputs)
-                self.mean.vals[grid_loc[0], grid_loc[1]] += output_mean
-                outputs -= output_mean
-
-
             # TODO: move this into a method
             # too few inputs?
             if len(inputs) < min_inputs:
@@ -1661,6 +1655,13 @@ class SeaIceFreeboard(DataLoader):
                            header=not os.path.exists(skip_file),
                            index=False)
                 continue
+
+            # HACK: prior_mean_method == "demean_outputs"
+            # - here de-mean the outputs, the mean subtracted will depend on the points in radius
+            if prior_mean_method == "demean_outputs":
+                output_mean = np.mean(outputs)
+                self.mean.vals[grid_loc[0], grid_loc[1]] += output_mean
+                outputs -= output_mean
 
             # ---
             # get hyper parameters - for the given date and location
