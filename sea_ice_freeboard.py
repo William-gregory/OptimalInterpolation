@@ -193,18 +193,35 @@ class SeaIceFreeboard(DataLoader):
 
     def prior_mean(self, date, method="fyi_average", **kwargs):
 
-        valid_methods = ["fyi_average", "zero"]
+        valid_methods = ["fyi_average", "zero", "demean_outputs"]
         assert method in valid_methods, f"method: {method} is not in valid_methods: {valid_methods}"
 
         if method == "fyi_average":
             self._prior_mean_fyi_ave(date, **kwargs)
         elif method == "zero":
             # store as data
-            self.mean = DataDict(vals=np.zeros(self.obs.vals.shape[:2]), name="mean")
+            # self.mean = DataDict(vals=np.zeros(self.obs.vals.shape[:2]), name="mean", default_dim_name="grid_loc_")
+            self.mean = DataDict.full(shape=self.obs.vals.shape[:2],
+                                      fill_val=0.,
+                                      name="mean",
+                                      default_dim_name="grid_loc_")
+        elif method == "demean_outputs":
+            # TODO: this should calculate the mean of the inputs for the corresponding:
+            #  - days_ahead, days_behind and radius. currently such action is done outside of this function
+            #  - where, also, the mean values are set. so for now set these values to 0, so won't impact inputs when
+            #  - they're subtracted
+            # TODO: need to reconsider the above, demean_obs_date() will subtract mean from each location (and each date)
+            #  - where what want to do is the above - i.e. subtract data from inputs such their mean is 0
+            #  - which means the same input will have different mean subtracted, as the mean will depend on
+            #  - other values in input (set)
+            self.mean = DataDict.full(shape=self.obs.vals.shape[:2],
+                                      fill_val=0.,
+                                      name="mean",
+                                      default_dim_name="grid_loc_")
 
-    def _prior_mean_fyi_ave(self, date, days_behind=9, days_ahead=-1):
+    def _prior_mean_fyi_ave(self, date, fyi_days_behind=9, fyi_days_ahead=-1):
         """calculate a trailing mean from first year sea ice data, in line with published paper"""
-        date_loc = match(date, self.fyi.dims['date']) + np.arange(-days_behind, days_ahead + 1)
+        date_loc = match(date, self.fyi.dims['date']) + np.arange(-fyi_days_behind, fyi_days_ahead + 1)
         assert np.min(date_loc) >= 0, f"had negative values in date_loc"
 
         # select a subset of the data
@@ -214,11 +231,11 @@ class SeaIceFreeboard(DataLoader):
         # store in 2-d array
         fyi_mean = np.full(self.obs.vals.shape[:2], fyi_mean)
         # store as data
-        self.mean = DataDict(vals=fyi_mean, name="mean")
+        self.mean = DataDict(vals=fyi_mean, name="mean", default_dim_name="grid_loc_")
 
     def demean_obs_date(self):
         """subtract mean from obs"""
-        # TODO: add a __sub__, __add__ methods to DataDict
+        # TODO: could use subtraction on DataDict for this
         # HACK:
         if self.obs_date.vals.shape[:2] == self.mean.vals.shape[:2]:
             self.obs_date.vals -= self.mean.vals[..., None, None]
@@ -1355,6 +1372,7 @@ class SeaIceFreeboard(DataLoader):
             engine="GPflow",
             kernel="Matern32",
             season='2018-2019',
+            prior_mean_method="fyi_average",
             optimise=True,
             hold_out=None,
             scale_inputs=False,
@@ -1567,7 +1585,7 @@ class SeaIceFreeboard(DataLoader):
                                         days_ahead=days_ahead,
                                         days_behind=days_behind,
                                         hold_out=hold_out,
-                                        prior_mean_method="fyi_average",
+                                        prior_mean_method=prior_mean_method,
                                         min_sie=None)
 
         # ----
@@ -1621,6 +1639,14 @@ class SeaIceFreeboard(DataLoader):
             inputs, outputs = self.select_input_output_from_obs_date(x=x_,
                                                                      y=y_,
                                                                      incl_rad=incl_rad)
+
+            # HACK: prior_mean_method == "demean_outputs"
+            # - here de-mean the outputs, the mean subtracted will depend on the points in radius
+            if prior_mean_method == "demean_outputs":
+                output_mean = np.mean(outputs)
+                self.mean.vals[grid_loc[0], grid_loc[1]] += output_mean
+                outputs -= output_mean
+
 
             # TODO: move this into a method
             # too few inputs?
@@ -1724,9 +1750,10 @@ class SeaIceFreeboard(DataLoader):
             preds["proj_loc_0"] = gl0
             preds["proj_loc_1"] = gl1
             # TODO: this needs to be more robust to handle different mean priors
-            preds['fyi_mean'] = self.mean.vals[gl0, gl1]
+            # - using the mean of the single GP just calculated
+            preds['fyi_mean'] = self.mean.vals[grid_loc[0], grid_loc[1]]
             # TODO: getting mean is quite hard coded -
-            preds['mean'] = self.mean.vals[gl0, gl1] + opt_hyp.get("mean_func_c", 0)
+            preds['mean'] = self.mean.vals[grid_loc[0], grid_loc[1]] + opt_hyp.get("mean_func_c", 0)
 
             preds['date'] = date
 
@@ -1747,7 +1774,7 @@ class SeaIceFreeboard(DataLoader):
             center_loc_bool = (preds['proj_loc_0'] == preds['grid_loc_0']) & (
                         preds['proj_loc_1'] == preds['grid_loc_1'])
 
-            center_pred = {_: preds[_][center_loc_bool]
+            center_pred = {_: preds[_][center_loc_bool] if isinstance(preds[_], np.ndarray) else np.array([preds[_]])
                            for _ in ["f*", "f*_var", "y_var", "mean", "fyi_mean"]}
             # center_pred['mean'] = preds['mean']
             # center_pred['fyi_mean'] = preds['fyi_mean']
