@@ -7,6 +7,8 @@ import pandas as pd
 import datetime
 import warnings
 
+from scipy.interpolate import griddata
+
 # for smoothing of values by date
 from astropy.convolution import convolve, Gaussian2DKernel
 
@@ -593,12 +595,20 @@ class DataDict(dict):
         """make DataDict from a DataFrame"""
         warnings.warn("from_dataframe not implemented")
 
-    def clip_smooth_by_date(self, nan_mask=None, vmin=None, vmax=None, std=1):
+    def clip_smooth_by_date(self,
+                            smooth_method='kernel',
+                            nan_mask=None,
+                            vmin=None,
+                            vmax=None,
+                            xn=None,
+                            yn=None,
+                            std=1):
         """clip smooth a DataDict object that has date in dims
         - expect remaining dim to be 2d
         """
         # assert isinstance(obj, DataDict), f"obj needs to be DataDict, got: {type(obj)}"
 
+        assert smooth_method in ['kernel', 'griddata'], f"smooth_method: {smooth_method} is not valid"
         assert "date" in self.dims, f"date not in dims"
         assert not self.flat, "must not be flat"
         assert len(self.vals.shape) == 3, "can only handle 3-d data"
@@ -624,11 +634,34 @@ class DataDict(dict):
             if vmin is not None:
                 data_smth[data_smth <= vmin] = vmin
             # TODO: review this -
-            data_smth = convolve(data_smth,
-                                 Gaussian2DKernel(x_stddev=std, y_stddev=std))
-            # TODO: this is in included for legacy reasons, requires review
-            #  - i.e. when / where would it get populated with zeros?
-            data_smth[data_smth == 0] = np.nanmean(data_smth)
+            # TODO: here have option to use griddata
+            if smooth_method == "kernel":
+                data_smth = convolve(data_smth,
+                                     Gaussian2DKernel(x_stddev=std, y_stddev=std))
+
+                # TODO: this is in included for legacy reasons, requires review
+                #  - i.e. when / where would it get populated with zeros?
+                data_smth[data_smth == 0] = np.nanmean(data_smth)
+            else:
+
+                if (xn is None) | (yn is None):
+                    print("either xn or yn is None, will try to get values from dims")
+                    xy_names = [k for k in self.dims if k != 'date']
+                    xn, yn = np.meshgrid(self.dims[xy_names[0]], self.dims[xy_names[1]])
+
+                has_val = ~np.isnan(data_smth)
+                # points to interpolate to
+                xi = np.concatenate([xn.flatten()[:, None], yn.flatten()[:, None]], axis=1)
+
+                data_shape = data_smth.shape
+                # TODO: allow griddata to take a different method (say cubic)
+                data_smth = griddata(points=(xn[has_val], yn[has_val]),
+                                     values=data_smth[has_val],
+                                     xi=xi,
+                                     method='linear',
+                                     fill_value=np.nan)
+                data_smth = data_smth.reshape(data_shape)
+
             if nan_mask is not None:
                 data_smth[nan_mask] = np.nan
 

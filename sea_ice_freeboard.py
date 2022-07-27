@@ -1281,6 +1281,7 @@ class SeaIceFreeboard(DataLoader):
                      prev_results_file=None,
                      prev_results_dir=None,
                      clip_and_smooth=False,
+                     smooth_method="kernel",
                      vmin_map=None,
                      vmax_map=None,
                      std=None,
@@ -1305,19 +1306,8 @@ class SeaIceFreeboard(DataLoader):
             # return hp_date
         elif isinstance(prev_results_file, str):
 
-            # post_config = {}
-            # locs = locals()
-            # for k in range(self.post_process.__code__.co_argcount):
-            #     var = self.post_process.__code__.co_varnames[k]
-            #     post_config[var] = locs[var]
-            # post_config.pop('self')
-            #
-            # # with open(os.path.join(date_dir, f"postprocess_{file_suffix}.json"), "w") as f:
-            # #     json.dump(post_config, f, indent=4)
-            #
-
             assert prev_results_dir is not None
-            assert os.path.exists(prev_results_dir)
+            assert os.path.exists(prev_results_dir), f"prev_results_dir:\n{prev_results_dir}\ndoes not exist"
 
             # read in previous results
             prev_res = self.read_results(results_dir=prev_results_dir,
@@ -1345,7 +1335,6 @@ class SeaIceFreeboard(DataLoader):
                 # --
                 # sie mask
                 # --
-
                 # use SIE to create a mask when clipping and smoothing hyper parameters
                 sie_mask = self.sie.subset(select_dims={'date': date})
                 sie_mask = np.isnan(sie_mask.vals)
@@ -1353,7 +1342,8 @@ class SeaIceFreeboard(DataLoader):
 
                 # - be in 'post_process' config
                 for k in hp_date.keys():
-                    hp_date[k] = hp_date[k].clip_smooth_by_date(nan_mask=sie_mask,
+                    hp_date[k] = hp_date[k].clip_smooth_by_date(smooth_method=smooth_method,
+                                                                nan_mask=sie_mask,
                                                                 vmin=vmin_map[k] if isinstance(vmin_map,
                                                                                                dict) else None,
                                                                 vmax=vmax_map[k] if isinstance(vmax_map,
