@@ -578,6 +578,13 @@ def plot_pcolormesh(ax, lon, lat, plot_data,
         cbar.ax.tick_params(labelsize=14)
 
 
+def date_str_to_datetime64(dates, format='%Y%m%d'):
+    # this can be slow, replace with pd.to_datetime method?
+    dates = [datetime.datetime.strptime(d, format)
+             for d in dates]
+    dates = np.array(dates, dtype='datetime64[D]')
+    return dates
+
 
 if __name__ == "__main__":
 

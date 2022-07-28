@@ -549,30 +549,51 @@ class DataDict(dict):
         if len(obs) == 1:
             if verbose:
                 print(f"only one object provided, will effectively just add dimension: {dim_name}")
-            # return obs[0]
 
-        # else:
         # check objects are all correct class
         for i, o in enumerate(obs):
             assert isinstance(o, cls), f"object: {i} was wrong class, got: {type(o)}"
 
+        # check all objects are flat (or not)
+        for i in range(1, len(obs)):
+            assert obs[i-1].flat == obs[i].flat, \
+                f"obj[{i-1}].flat={obs[i-1].flat} but obj[{i}].flat={obs[i].flat}, all need to be the same "
+
+        obs_flat = obs[0].flat
+
         # check the dims match
         for i in range(1, len(obs)):
-            assert cls.dims_equal(obs[i - 1].dims, obs[i].dims), f"obs[{i - 1}].dims != obs[{i}].dims"
+            # if objects are all not flat check their dims are equal
+            # - this is pretty strict
+            if not obs_flat:
+                assert cls.dims_equal(obs[i - 1].dims, obs[i].dims), f"obs[{i - 1}].dims != obs[{i}].dims"
+            # otherwise just check the dim_names are all the same
+            else:
+                assert obs[i - 1].dims.keys() == obs[i].dims.keys(), f"obs[{i - 1}].dims.keys() != obs[{i}].dims.keys()"
+
         # require each object is not flat
-        for ob in obs:
-            assert not ob.flat
+        # for ob in obs:
+        #     assert not ob.flat
+
         # require all the names are unique
         dim_idx = np.array([ob.name for ob in obs])
-        assert len(dim_idx) == len(np.unique(dim_idx))
+        assert len(dim_idx) == len(np.unique(dim_idx)), f"each object name must be unique, got: {dim_idx}"
 
-        # add dimension vals and concatentate together
-        vals = np.concatenate([ob.vals[..., None] for ob in obs], axis=-1)
+        # if not flat : add dimension vals and concatenate together
+        if not obs_flat:
+            vals = np.concatenate([ob.vals[..., None] for ob in obs], axis=-1)
+            dims = obs[0].dims.copy()
+            dims[dim_name] = dim_idx
+        # if flat - concatenate vals and dims, add extra dims
+        else:
+            # concat vals and dims
+            vals = np.concatenate([ob.vals for ob in obs], axis=-1)
+            dims = {k: np.concatenate([ob.dims[k] for ob in obs])
+                    for k in obs[0].dims.keys()}
+            # add the extra dimension
+            dims[dim_name] = np.concatenate([ np.full(len(ob.vals), ob.name) for ob in obs])
 
-        dims = obs[0].dims.copy()
-        dims[dim_name] = dim_idx
-
-        return DataDict(vals=vals, dims=dims, is_flat=False, name=name)
+        return DataDict(vals=vals, dims=dims, is_flat=obs_flat, name=name)
 
     def not_nan(self, inplace=False):
         return self.subset(select_array=~np.isnan(self.vals), inplace=inplace)
@@ -592,10 +613,10 @@ class DataDict(dict):
         return df
 
     @staticmethod
-    def from_dataframe(df, val_col, use_index=True, idx_col=None):
+    def from_dataframe(df, val_col, idx_col=None, name=None):
         """make DataDict from a DataFrame"""
 
-        if use_index:
+        if idx_col is None:
             idx = df.index
 
             # index is MultiIndex?
@@ -615,8 +636,8 @@ class DataDict(dict):
                 dims = {dim_name: idx.values}
 
         else:
-            assert idx_col is not None, \
-                f"use_index: {use_index} but idx_col is {idx_col}, specify columns to use as index"
+            # assert idx_col is not None, \
+            #     f"use_index: {use_index} but idx_col is {idx_col}, specify columns to use as index"
 
             idx_col = idx_col if isinstance(idx_col, list) else [idx_col]
             dims = {ic: df[ic].values for ic in idx_col}
@@ -629,7 +650,9 @@ class DataDict(dict):
                     for vc in val_col]
         else:
             assert val_col in df, f"val_col: '{val_col}' is not in df columns: {df.columns}"
-            return DataDict(vals=df[val_col].values, dims=dims, name=val_col, is_flat=True)
+            # if only getting a single column, allow to override the name
+            name = val_col if name is None else name
+            return DataDict(vals=df[val_col].values, dims=dims, name=name, is_flat=True)
 
     def clip_smooth_by_date(self,
                             smooth_method='kernel',
@@ -816,12 +839,10 @@ if __name__ == "__main__":
     dda = DataDict.from_dataframe(df_single, val_col=df_single.columns[0])
 
     # selecting multiple columns
-    dda, ddb, ddc = DataDict.from_dataframe(df_single, val_col=df_single.columns.values, use_index=True)
+    dda, ddb, ddc = DataDict.from_dataframe(df_single, val_col=df_single.columns.values)
 
     # using columns for the dimension
-    ddd = DataDict.from_dataframe(df_single, val_col='a', use_index=False, idx_col=['b', 'c'])
-
-
+    ddd = DataDict.from_dataframe(df_single, val_col='a',  idx_col=['b', 'c'])
 
 
     # ---
