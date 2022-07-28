@@ -35,20 +35,7 @@ class DataLoader():
         self.aux = None
         self.obs = None
         self.sie = None
-
-        # if sat_data_dir is None:
-        #     sat_data_dir = get_data_path("CS2S3_CPOM")
-        #     if verbose > 1:
-        #         print(f"sat_data_dir not provided, using default: {sat_data_dir}")
-        #
-        # if data_dir is None:
-        #     if verbose > 1:
-        #         print("no data dir provided, will default to package")
-        #     self.data_dir = get_data_path()
-        # else:
-        #     if verbose > 1:
-        #         print(f"setting data_dir: {data_dir}")
-        #     self.data_dir = data_dir
+        self.raw_obs = None
 
         if sat_list is None:
             sat_list = ["CS2_SAR", "CS2_SARIN", "S3A", "S3B"]
@@ -104,6 +91,7 @@ class DataLoader():
         # satellite list
         sat_list = sat_list if sat_list is not None else self.sat_list
 
+        # TODO: here allow for reading of raw data, and setting as obs instead of the below
         sats = {}
         for s in sat_list:
             if self.verbose:
@@ -137,6 +125,59 @@ class DataLoader():
         self.obs = DataDict.concatenate(*[v for v in sats.values()],
                                         dim_name="sat",
                                         name="obs")
+
+    def load_raw_data(self,
+                      raw_data_dir=None,
+                      sat_list=None,
+                      season="2018-2019"):
+
+        # NOTE: raw data is assumed to be only for 2018-2019 season
+        assert season=="2018-2019", f"currently only implemented for season '2018-2019'"
+        # ----
+        # read data
+        # ---
+
+        if raw_data_dir is None:
+            # HARDCODED: path for data
+            raw_data_dir = get_data_path("RAW")
+            if self.verbose:
+                print(f"raw_data_dir not provided, using default: {raw_data_dir}")
+
+        # satellite list
+        sat_list = sat_list if sat_list is not None else self.sat_list
+        # sats = ["S3A", "S3B", "CS2_SAR", "CS2_SARIN"]
+
+        sat_data = {}
+        print("reading in (raw / along track) satellite data from:")
+        for k in sat_list:
+            print(k)
+            sat_path = os.path.join(raw_data_dir, f"raw_along_track_lon_lat_fb_{k}.csv")
+            assert os.path.exists(sat_path), f"sat file:\n{sat_path}\ndoes not exist!"
+
+            _ = pd.read_csv(sat_path)
+            # convert date datetime
+            # TODO: here would like to convert to datetime - i.e. date with fraction of day
+            #  - keep one days difference equal to 1
+            # _['date'] = pd.to_datetime(_['date'].astype(str), format='%Y%m%d')
+            # _['datetime'] = _['datetime'].astype('datetime64[s]')
+
+            # convert lon, lat to x,y values - to be used for differences
+            _['x'], _['y'] = WGS84toEASE2_New(_['lon'].values, _['lat'].values)
+
+            sat_data[k] = DataDict.from_dataframe(_,
+                                                  val_col='fb',
+                                                  idx_col=['x', 'y', 'datetime'],
+                                                  name=k)
+
+            # HACK: keep dates as datetime64[D] - for now
+            # TODO: allow this to be datetime
+            sat_data[k].dims['datetime'] = sat_data[k].dims['datetime'].astype('datetime64[s]')
+
+        tmp = [v for k, v in sat_data.items()]
+
+        # store
+        self.raw_obs = DataDict.concatenate(*tmp, dim_name="sat", name="obs")
+
 
     def load_aux_data(self,
                       aux_data_dir=None,
@@ -201,6 +242,7 @@ class DataLoader():
     def load_data(self,
                   aux_data_dir=None,
                   sat_data_dir=None,
+                  raw_data_dir=None,
                   sat_list=None,
                   grid_res=None,
                   season=None,
@@ -221,6 +263,10 @@ class DataLoader():
                            season=season,
                            grid_res=grid_res)
 
+        if raw_data_dir is not None:
+            self.load_raw_data(raw_data_dir=raw_data_dir)
+        else:
+            print("not loading raw data (raw_data_dir is None)")
 
 
 
@@ -730,6 +776,7 @@ if __name__ == "__main__":
     # specify data directories
     sat_data_dir = get_data_path("CS2S3_CPOM")
     aux_data_dir = get_data_path("aux")
+    raw_data_dir = get_data_path("RAW")
 
     # load aux data
     dl.load_aux_data(aux_data_dir=aux_data_dir, grid_res="50km", season="2018-2019")
@@ -738,4 +785,7 @@ if __name__ == "__main__":
 
     # data is store in a dict with keys 'data' and 'dims'
     aux, sie, obs = dl.aux, dl.sie, dl.obs
+
+    # load raw data
+    dl.load_raw_data(raw_data_dir=raw_data_dir)
 

@@ -636,10 +636,11 @@ class DataDict(dict):
                 dims = {dim_name: idx.values}
 
         else:
-            # assert idx_col is not None, \
-            #     f"use_index: {use_index} but idx_col is {idx_col}, specify columns to use as index"
 
             idx_col = idx_col if isinstance(idx_col, list) else [idx_col]
+            assert np.in1d(idx_col, df.columns).all(), \
+                f"not all idx_col: {idx_col} are in df.columns: {df.columns.values}"
+
             dims = {ic: df[ic].values for ic in idx_col}
 
         # return DataDict (or list of if selecting from multiple columns)
