@@ -29,7 +29,7 @@ from gpflow.mean_functions import Constant
 from gpflow.utilities import parameter_dict, multiple_assign
 
 
-
+# TODO: put PurePythonGPR in separate script / module
 class PurePythonGPR():
     """Pure Python GPR class - used to hold model details from pure python implementation"""
 
@@ -154,6 +154,7 @@ class SeaIceFreeboard(DataLoader):
         self.input_params = {"date": "", "days_behind": 0, "days_ahead": 0}
         self.obs_date = None
 
+
         # random number generator - used for selecting inducing points
         self.rnd = np.random.default_rng(seed=rng_seed)
 
@@ -163,27 +164,66 @@ class SeaIceFreeboard(DataLoader):
         assert self.aux is not None, f"aux attribute is None, run load_data() or load_aux_data()"
         assert self.obs is not None, f"obs attribute is None, run load_data() or load_obs_data()"
 
-        # select subset of obs date
-        t_range = np.arange(-days_behind, days_ahead + 1)
-        date_idx = match(date, self.obs.dims['date']) + t_range
-        assert date_idx.min() >= 0, f"date_idx values go negative, found min: {date_idx.min()}"
+        if self.raw_obs is None:
+            print("selecting data from gridded observations (raw_obs is None)")
+            # select subset of obs date
+            t_range = np.arange(-days_behind, days_ahead + 1)
+            date_idx = match(date, self.obs.dims['date']) + t_range
+            assert date_idx.min() >= 0, f"date_idx values go negative, found min: {date_idx.min()}"
 
-        select_dims = {"date": self.obs.dims['date'][date_idx]}
+            select_dims = {"date": self.obs.dims['date'][date_idx]}
 
-        # check if data has already been selected
-        # if self.obs_date is not None:
-        #     DataDict.dims_equal(self.obs_date['select_dims'], select_dims)
+            # check if data has already been selected
+            # if self.obs_date is not None:
+            #     DataDict.dims_equal(self.obs_date['select_dims'], select_dims)
 
-        self.obs_date = self.obs.subset(select_dims=select_dims)
-        self.obs_date['date'] = date
-        # store the original dates
-        self.obs_date['t_to_date'] = self.obs_date.dims['date']
-        # change the dates to t
-        self.obs_date.set_dim_idx(dim_idx="date", new_idx="t", dim_vals=t_range)
-        # dimension used to select from original data
-        self.obs_date['select_dims'] = select_dims
-        # de-meaned obs
-        self.obs_date['de-mean'] = False
+            self.obs_date = self.obs.subset(select_dims=select_dims)
+            self.obs_date['date'] = date
+            # store the original dates
+            self.obs_date['t_to_date'] = self.obs_date.dims['date']
+            # change the dates to t
+            self.obs_date.set_dim_idx(dim_idx="date", new_idx="t", dim_vals=t_range)
+            # dimension used to select from original data
+            self.obs_date['select_dims'] = select_dims
+            # de-meaned obs
+            self.obs_date['de-mean'] = False
+            self.obs_date['raw_data'] = False
+
+        else:
+            # TODO: tidy select_obs_date for raw_obs up
+            # convert date to datetime64 - so can work with datetime in dims
+            date_ = np.datetime64(datetime.datetime.strptime(date, "%Y%m%d"))
+            date_ = date_.astype('datetime64[s]')
+            # get the interval of datetime to select
+            # NOTE: here it is assumed dates are continuous (i.e. there are no gaps)
+            date_behind = date_ - np.timedelta64(days_behind, 'D')
+            # NOTE: for date ahead adding one because the day start at 00:00
+            date_ahead = date_ + np.timedelta64(days_ahead + 1, 'D')
+
+            select_array = (self.raw_obs.dims['datetime'] >= date_behind) & (self.raw_obs.dims['datetime'] < date_ahead)
+
+            self.obs_date = self.raw_obs.subset(select_array=select_array)
+
+            # TODO: review the following to determine how many of the obs_date keys are needed
+            # TODO: determine if this date can be datetim64
+            self.obs_date['date'] = date
+            self.obs_date['t_to_date'] = self.obs_date.dims['datetime']
+
+            # get the difference in terms of fraction of a day
+            # - datetimes are in seconds, so divide by seconds in a day
+            t_range = (self.obs_date.dims['datetime'] - date_).astype(float) / (60 * 60 * 24)
+            # TODO: consider if this should be done else where
+            warnings.warn("offsetting t_range by 0.5, so interval is symmetrical, really should be"
+                          "making predictions at noon")
+            t_range -= 0.5
+            self.obs_date.set_dim_idx(dim_idx="datetime", new_idx="t", dim_vals=t_range)
+
+            # dimension used to select from original data
+            # self.obs_date['select_array'] = select_array
+            # de-meaned obs
+            self.obs_date['de-mean'] = False
+            self.obs_date['raw_data'] = True
+
 
     def remove_hold_out_obs_date(self,
                                  hold_out=None,
@@ -191,8 +231,15 @@ class SeaIceFreeboard(DataLoader):
         if hold_out is None:
             print("no hold_out values provided")
             return None
-        select_dims = {"sat": hold_out, "t": t}
-        self.obs_date.fill_value(fill=np.nan, select_dims=select_dims)
+        if self.obs_date['raw_data']:
+            warnings.warn("removing observation on hold_out using time adjust by 0.5")
+            select_array = np.in1d(self.obs_date.dims['sat'], hold_out) & \
+                           (self.obs_date.dims['t'] < 0.5) & \
+                           (self.obs_date.dims['t'] >= -0.5)
+            self.obs_date.fill_value(fill=np.nan, select_array=select_array)
+        else:
+            select_dims = {"sat": hold_out, "t": t}
+            self.obs_date.fill_value(fill=np.nan, select_dims=select_dims)
 
     def prior_mean(self, date, method="fyi_average", **kwargs):
 
@@ -239,7 +286,7 @@ class SeaIceFreeboard(DataLoader):
     def demean_obs_date(self):
         """subtract mean from obs"""
         # TODO: could use subtraction on DataDict for this
-        # HACK:
+        # HACK: want to subtract mean value from each point, for fyi_mean all means are the same (for given date)
         if self.obs_date.vals.shape[:2] == self.mean.vals.shape[:2]:
             self.obs_date.vals -= self.mean.vals[..., None, None]
         else:
@@ -257,9 +304,13 @@ class SeaIceFreeboard(DataLoader):
         else:
             assert isinstance(min_sie, (float, int))
             sie_bool = self.sie.vals >= min_sie
-        select_array = (~np.isnan(self.obs_date.vals)) & sie_bool
+
+        select_array = (~np.isnan(self.obs_date.vals))
+        if not self.obs_date['raw_data']:
+            select_array = select_array & sie_bool
         _ = self.obs_date.subset(select_array=select_array, new_name="obs_nonan")
         self.X_tree_data = _
+        # TODO: is X_tree_data['obs_date_dims'] used again?
         self.X_tree_data['obs_date_dims'] = self.obs_date.dims
 
         # combine xy data - used for KDtree
@@ -1488,7 +1539,8 @@ class SeaIceFreeboard(DataLoader):
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         run_info = {
-            "run_datetime": now
+            "run_datetime": now,
+            "raw_data": self.raw_obs is None
         }
 
         # add git_info
@@ -1617,7 +1669,7 @@ class SeaIceFreeboard(DataLoader):
         # store parameters (from GPflow) in dict
         param_dict = {}
 
-        # TODO: tidy up the reading in of previous model parameters
+        # TODO: tidy up the reading in of previous model parameters - make this into a method?
         # if the engine is not PurePython
         if engine != "PurePython":
             # load pre-existing model parameters, if they exist
