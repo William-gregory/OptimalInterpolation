@@ -591,9 +591,45 @@ class DataDict(dict):
 
         return df
 
-    def from_dataframe(self):
+    @staticmethod
+    def from_dataframe(df, val_col, use_index=True, idx_col=None):
         """make DataDict from a DataFrame"""
-        warnings.warn("from_dataframe not implemented")
+
+        if use_index:
+            idx = df.index
+
+            # index is MultiIndex?
+            if isinstance(idx, pd.core.indexes.multi.MultiIndex):
+                dim_names = idx.names
+                # get the dims dict from idx.values
+                # - convert the index values to a 2-d array, then select values
+                idx_vals = np.array(idx.values.tolist())
+                dims = {dn: idx_vals[:, i] for i, dn in enumerate(dim_names)}
+                # NOTE: could do this differently - see below (which is fast with lots of data?)
+                # dims = {dn: [_[i] for _ in idx.values] for i, dn in enumerate(dim_names)}
+
+            # otherwise expect single index
+            else:
+                # TODO: consider preventing the dim_name from being None, need to allow for a default (idx0?)
+                dim_name = idx.names[0]
+                dims = {dim_name: idx.values}
+
+        else:
+            assert idx_col is not None, \
+                f"use_index: {use_index} but idx_col is {idx_col}, specify columns to use as index"
+
+            idx_col = idx_col if isinstance(idx_col, list) else [idx_col]
+            dims = {ic: df[ic].values for ic in idx_col}
+
+        # return DataDict (or list of if selecting from multiple columns)
+        if isinstance(val_col, (list, tuple, np.ndarray)):
+            assert np.in1d(val_col, df.columns).all(), \
+                f"not all val_col: {val_col} are in df.columns: {df.columns.values}"
+            return [DataDict(vals=df[vc].values, dims=dims, name=vc, is_flat=True)
+                    for vc in val_col]
+        else:
+            assert val_col in df, f"val_col: '{val_col}' is not in df columns: {df.columns}"
+            return DataDict(vals=df[val_col].values, dims=dims, name=val_col, is_flat=True)
 
     def clip_smooth_by_date(self,
                             smooth_method='kernel',
@@ -766,6 +802,27 @@ if __name__ == "__main__":
     df1 = dflat.to_dataframe()
 
     assert df0.equals(df1), f"DataFrames from flat and not flat object expected to be equal"
+
+    # ---
+    # convert from pd.DataFrame
+    # ---
+
+    # - multi index
+    dd0 = DataDict.from_dataframe(df0, val_col=df0.columns[0])
+    dd1 = DataDict.from_dataframe(df1, val_col=df1.columns[0])
+
+    # - (single) index
+    df_single = pd.DataFrame(np.arange(100 * 3).reshape(100, 3), columns=['a', 'b', 'c'])
+    dda = DataDict.from_dataframe(df_single, val_col=df_single.columns[0])
+
+    # selecting multiple columns
+    dda, ddb, ddc = DataDict.from_dataframe(df_single, val_col=df_single.columns.values, use_index=True)
+
+    # using columns for the dimension
+    ddd = DataDict.from_dataframe(df_single, val_col='a', use_index=False, idx_col=['b', 'c'])
+
+
+
 
     # ---
     # subset
