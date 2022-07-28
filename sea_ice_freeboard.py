@@ -11,6 +11,8 @@ import warnings
 import datetime
 import time
 import subprocess
+import shelve
+from ast import literal_eval as make_tuple
 
 from scipy.stats import shapiro, norm
 
@@ -24,7 +26,8 @@ from OptimalInterpolation.utils import WGS84toEASE2_New, \
     EASE2toWGS84_New, SMLII_mod, SGPkernel, GPR, get_git_information, move_to_archive
 
 from gpflow.mean_functions import Constant
-from gpflow.utilities import parameter_dict
+from gpflow.utilities import parameter_dict, multiple_assign
+
 
 
 class PurePythonGPR():
@@ -1286,7 +1289,11 @@ class SeaIceFreeboard(DataLoader):
                      vmax_map=None,
                      std=None,
                      grid_res=None,
-                     big_grid_size=360):
+                     big_grid_size=360,
+                     prev_file_suffix=None):
+
+        if prev_file_suffix is not None:
+            warnings.warn(f"prev_file_suffix is not None, it's: {prev_file_suffix}, however it's not used by the post_process method")
 
         # TODO: add option to provide previous result directly to post_process - instead of reading in from file
         assert grid_res is not None, "grid_res needs to be specified"
@@ -1366,6 +1373,7 @@ class SeaIceFreeboard(DataLoader):
             season='2018-2019',
             prior_mean_method="fyi_average",
             optimise=True,
+            load_params=False,
             hold_out=None,
             scale_inputs=False,
             scale_outputs=False,
@@ -1392,6 +1400,7 @@ class SeaIceFreeboard(DataLoader):
         prediction_file = f"prediction{file_suffix}.csv"
         config_file = f"input_config{file_suffix}.json"
         skipped_file = f"skipped{file_suffix}.csv"
+        param_file = f"params{file_suffix}"
 
         if post_process is None:
             post_process = {}
@@ -1534,11 +1543,12 @@ class SeaIceFreeboard(DataLoader):
 
         prior_rdf = pd.DataFrame(columns=["grid_loc_0", "grid_loc_1"])
         if overwrite:
+            param_files = [param_file + _ for _ in ['.bak', '.dir', '.dat', '.pkl']]
             move_to_archive(top_dir=date_dir,
                             file_names=[config_file,
                                         result_file,
                                         prediction_file,
-                                        skipped_file],
+                                        skipped_file] + param_files,
                             suffix=f"_{now}",
                             verbose=True)
 
@@ -1599,6 +1609,33 @@ class SeaIceFreeboard(DataLoader):
 
         # TODO: review why self.verbose is set to 0 here
         # self.verbose = 0
+
+        # ---
+        # model parameters - load previously generated?
+        # ---
+
+        # store parameters (from GPflow) in dict
+        param_dict = {}
+
+        # TODO: tidy up the reading in of previous model parameters
+        # if the engine is not PurePython
+        if engine != "PurePython":
+            # load pre-existing model parameters, if they exist
+            prev_data_dir = post_process.get('prev_results_dir', None)
+            if prev_data_dir is not None:
+                prev_data_dir = os.path.join(prev_data_dir, date)
+                assert os.path.exists(prev_data_dir), f"prev_data_dir:\n{prev_data_dir}\nwas provide but does not exist"
+                prev_file_suffix = post_process.get("prev_file_suffix", "")
+                prev_param_file = os.path.join(prev_data_dir, f"params{prev_file_suffix}")
+
+                with shelve.open(prev_param_file) as sdb:
+                    for k in sdb.keys():
+                        if k not in param_dict:
+                            # NOTE: the keys in shelve objects are strings, expect them to be able to be converted to tuples
+                            param_dict[make_tuple(k)] = sdb[k]
+
+                print(f"loaded parameters for: {len(param_dict)} GP models")
+
         for i in range(num_loc):
 
             if (i % print_every) == 0:
@@ -1622,6 +1659,8 @@ class SeaIceFreeboard(DataLoader):
 
             x_ = self.aux['x'].vals[grid_loc]
             y_ = self.aux['y'].vals[grid_loc]
+
+            xy_loc = (x_, y_)
 
             # alternatively could use
             # x_ = self.obs.dims['x'][grid_loc[1]]
@@ -1656,6 +1695,7 @@ class SeaIceFreeboard(DataLoader):
             # ---
             # get hyper parameters - for the given date and location
             # ---
+
             # hps = hyper_params_for_date_and_grid_loc(res, date, grid_loc,
             #                                          ls_order=ls_order)
 
@@ -1664,6 +1704,8 @@ class SeaIceFreeboard(DataLoader):
             hps = self.hyper_params_for_date_and_grid_loc(hp_date, date, grid_loc,
                                                           ls_order=ls_order)
 
+            # HACK: just skipping points where kernel_variance is missing
+            #  - this would be from previously loaded data
             if np.isnan(hps['kernel_variance']):
                 if self.verbose:
                     print(f'kernel_variance is nan, skipping this (grid) location: {grid_loc}')
@@ -1687,6 +1729,20 @@ class SeaIceFreeboard(DataLoader):
                            mean_function=mean_function,
                            min_obs_for_svgp=min_obs_for_svgp,
                            **inducing_point_params)
+
+            # ----
+            # load model parameters
+            # ----
+
+            if (self.engine != "PurePython") & load_params:
+
+                if xy_loc in param_dict:
+                    if self.verbose > 1:
+                        print("loading previous model parameters")
+                    # NOTE: if min_obs_for_svgp is different from last time it was run
+                    # - this could lead to self.model being a different type
+                    # - and this will cause an issue
+                    multiple_assign(self.model, param_dict[xy_loc])
 
             # ---
             # get the hyper parameters
@@ -1729,6 +1785,15 @@ class SeaIceFreeboard(DataLoader):
 
             preds = self.predict_freeboard(x=x_pred,
                                            y=y_pred)
+
+            # ----
+            # store model parameters
+            # ----
+
+            # TODO: allow for parameter extraction from PurePython, similar to GPflow (low priority)
+            if self.engine != "PurePython":
+                with shelve.open(os.path.join(date_dir, param_file), writeback=True) as sdb:
+                    sdb[repr(xy_loc)] = parameter_dict(self.model)
 
             # ----
             # store values in DataFrame
