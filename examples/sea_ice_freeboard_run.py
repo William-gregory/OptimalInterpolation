@@ -22,9 +22,9 @@ if __name__ == "__main__":
 
     config = {
         "dates": ["20181201"],  # , "20190101", "20190201", "20190301"],
-        "optimise": True,
-        "file_suffix": "",
-        "output_dir": os.path.join(output_base_dir, "test"),
+        "optimise": False,
+        "file_suffix": "_chkparams",
+        "output_dir": os.path.join(output_base_dir, "test_svgp"),
         "inclusion_radius": 300,
         "days_ahead": 4,
         "days_behind": 4,
@@ -34,18 +34,21 @@ if __name__ == "__main__":
         "coarse_grid_spacing": 5,
         "min_inputs": 5,
         "verbose": 1,
-        "engine": "GPflow",
+        "engine": "GPflow_svgp",
         "kernel": "Matern32",
         # "mean_function": "constant",
         "hold_out": ["S3B"],
+        "load_params": True,
+        "overwrite": True,
         "predict_on_hold": True,
         "scale_inputs": True,
         "scale_outputs": False,
         "bound_length_scales": False,
         "append_to_file": True,
         "post_process": {
-            "prev_results_dir": None,
+            "prev_results_dir": os.path.join(output_base_dir, "test_svgp","radius300_daysahead4_daysbehind4_gridres50_season2018-2019_coarsegrid5_holdoutS3B_boundlsFalse"),
             "prev_results_file": None,
+            "prev_file_suffix": "",
             "clip_and_smooth": False,
             "vmax_map": {
                 "ls_x": 2 * 300 * 1000,
@@ -61,6 +64,10 @@ if __name__ == "__main__":
                 "kernel_variance": 2e-6,
                 "likelihood_variance": 2e-6
             }
+        },
+        "inducing_point_params": {
+            "num_inducing_points": 50,
+            "min_obs_for_svgp": 500
         }
     }
 
@@ -93,6 +100,7 @@ if __name__ == "__main__":
 
     engine = config.get("engine", "GPflow")
     kernel = config.get("kernel", "Matern32")
+    overwrite = config.get('overwrite', False)
     hold_out = config.get("hold_out", None)
 
     scale_inputs = config.get("scale_inputs", False)
@@ -112,6 +120,10 @@ if __name__ == "__main__":
     file_suffix = config.get("file_suffix", "")
     post_process_config = config.get("post_process", {})
 
+    load_params = config.get("load_params", False)
+
+    inducing_point_params = config.get("inducing_point_params", {})
+
     # -----
     # initialise SeaIceFreeboard object
     # -----
@@ -130,6 +142,7 @@ if __name__ == "__main__":
 
     sifb.load_data(aux_data_dir=os.path.join(data_dir, "aux"),
                    sat_data_dir=os.path.join(data_dir, "CS2S3_CPOM"),
+                   # raw_data_dir=os.path.join(data_dir, "RAW"),
                    season=season)
 
     for date in dates:
@@ -148,6 +161,8 @@ if __name__ == "__main__":
                  min_sie=min_sie,
                  engine=engine,
                  kernel=kernel,
+                 overwrite=overwrite,
+                 load_params=load_params,
                  optimise=optimise,
                  season=season,
                  hold_out=hold_out,
@@ -158,5 +173,7 @@ if __name__ == "__main__":
                  bound_length_scales=bound_length_scales,
                  mean_function=mean_function,
                  file_suffix=file_suffix,
-                 post_process=post_process_config)
+                 post_process=post_process_config,
+                 print_every=5,
+                 inducing_point_params=inducing_point_params)
 
