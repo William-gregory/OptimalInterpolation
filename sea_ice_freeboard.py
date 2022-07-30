@@ -911,13 +911,8 @@ class SeaIceFreeboard(DataLoader):
 
         elif self.engine == "GPflow_svgp":
 
-            # TODO: let optimise kwargs provide arguments to _svgp_optimise
-            opt_logs = self._svgp_optimise(minibatch_size=100,
-                                           maxiter=20000,
-                                           train_inducing_points=False,
-                                           persistance=100,
-                                           early_stop=True,
-                                           save_best=False)
+            # TODO: store (mini batch) elbo values (the objective function) some where
+            opt_logs = self._svgp_optimise(**kwargs)
 
             hyp_params = self.get_hyperparameters(scale_hyperparams=scale_hyperparams)
             mll = self.get_marginal_log_likelihood()
@@ -926,8 +921,6 @@ class SeaIceFreeboard(DataLoader):
                 "marginal_loglikelihood": mll,
                 **hyp_params
             }
-
-
 
         elif self.engine == "PurePython":
 
@@ -951,6 +944,7 @@ class SeaIceFreeboard(DataLoader):
         :param model: GPflow model
         :param interations: number of iterations
         """
+        # TODO: REMOVE _svgp_run_adam if it's not being used
         # based off of:
         # https://gpflow.github.io/GPflow/develop/notebooks/advanced/gps_for_big_data.html
 
@@ -965,6 +959,8 @@ class SeaIceFreeboard(DataLoader):
         # Create an Adam Optimizer action
         logf = []
         train_iter = iter(train_dataset.batch(minibatch_size))
+
+
         training_loss = model.training_loss_closure(train_iter, compile=True)
         # TODO: add parameters for Adam
         optimizer = tf.optimizers.Adam()
@@ -1009,10 +1005,14 @@ class SeaIceFreeboard(DataLoader):
 
 
     def _svgp_optimise(self,
+                       use_minibatch=True,
+                       gamma=0.5,
+                       learning_rate=0.05,
+                       trainable_inducing_variable=False,
                        minibatch_size=100,
                        maxiter=20000,
-                       train_inducing_points=False,
-                       persistance=100,
+                       log_freq=10,
+                       persistence=100,
                        early_stop=True,
                        save_best=False):
         """"""
@@ -1031,29 +1031,112 @@ class SeaIceFreeboard(DataLoader):
         # minibatch_size = 100
 
         # We turn off training for inducing point locations
-        gpflow.set_trainable(self.model.inducing_variable, train_inducing_points)
+        # gpflow.set_trainable(self.model.inducing_variable, train_inducing_points)
 
         # train_dataset - copied from
         N = len(self.x)
-        # TODO: review the impacts of repeat and shuffle on tf.Dataset
-        train_dataset = tf.data.Dataset.from_tensor_slices(data).repeat().shuffle(N)
 
+        if use_minibatch:
+            # TODO: review the impacts of repeat and shuffle on tf.Dataset
+            # train_dataset = tf.data.Dataset.from_tensor_slices(data).repeat().shuffle(N)
+            autotune = tf.data.experimental.AUTOTUNE
+            train_dataset = (
+                tf.data.Dataset.from_tensor_slices(data)
+                .prefetch(autotune)
+                .repeat()
+                .shuffle(N)
+                .batch(minibatch_size)
+            )
+            train_iter = iter(train_dataset)
+            loss_fn = self.model.training_loss_closure(train_iter, compile=True)
+
+        else:
+            loss_fn = self.model.training_loss_closure(data)
+
+        # make q_mu and q_sqrt non training to adam
+        gpflow.utilities.set_trainable(self.model.q_mu, False)
+        gpflow.utilities.set_trainable(self.model.q_sqrt, False)
+
+        # select the variational parameters for natural gradients
+        variational_vars = [(self.model.q_mu, self.model.q_sqrt)]
+        natgrad_opt = gpflow.optimizers.NaturalGradient(gamma=gamma)
+
+        # make the inducing variable trainable ?
+        gpflow.set_trainable(self.model.inducing_variable, trainable_inducing_variable)
+
+        # parameters for adam to train
+        adam_vars = self.model.trainable_variables
+        adam_opt = tf.optimizers.Adam(learning_rate)
+
+        # each optimisation step will update variational and then model (GP?) parameters
+        @tf.function
+        def optimisation_step():
+            natgrad_opt.minimize(loss_fn, variational_vars)
+            adam_opt.minimize(loss_fn, adam_vars)
+
+        # --
+        # iterate the variables
+        # --
+
+        # TODO: in _svgp_optimise variable iteration needs cleaning up
+        t0 = time.time()
+        # initialise the maximum elbo
+        max_elbo = -np.inf
+        # best_step = 0
+        stopped_early = False
+        # NOTE: need to use copy.deepcopy() - this could slow things down
+        params = parameter_dict(self.model)
+
+        logf = []
+
+        for step in range(maxiter):
+            optimisation_step()
+            if step % log_freq == 0:
+                # training_loss() will give the training_loss (negative elbo) for a given batch
+                elbo = -loss_fn().numpy()
+                if self.verbose > 2:
+                    print(f"step: {step},  elbo: {elbo:.2f}")
+                # check if new elbo estimate is larger than previous
+                if (elbo > max_elbo) & (early_stop):
+                    max_elbo = elbo
+                    max_count = 0
+                    # TODO: store parameters
+                    # - will this copy by reference? yes(?)
+                    # best_step = step
+                    if save_best:
+                        params = copy.deepcopy(parameter_dict(self.model))
+                    # else:
+                    #     params = parameter_dict(model).copy()
+                else:
+                    max_count += log_freq
+                    if (max_count >= persistence) & (early_stop):
+                        print("objective did not improve stopping")
+                        stopped_early = True
+                        break
+
+                logf.append(elbo)
+            # return logf, params, best_step, stopped_early
+
+        t1 = time.time()
+        if self.verbose:
+            print(f"opt run time: {t1-t0:.2f}s")
         # run adam optimizer
         # TODO: add print statements (for a given verbose level)
-        logf, params, best_step, stopped_early = self._svgp_run_adam(model=self.model,
-                                                                     iterations=maxiter,
-                                                                     train_dataset=train_dataset,
-                                                                     minibatch_size=minibatch_size,
-                                                                     early_stop=early_stop,
-                                                                     persistance=persistance,
-                                                                     save_best=save_best)
+        # logf, params, best_step, stopped_early = self._svgp_run_adam(model=self.model,
+        #                                                              iterations=maxiter,
+        #                                                              train_dataset=train_dataset,
+        #                                                              minibatch_size=minibatch_size,
+        #                                                              early_stop=early_stop,
+        #                                                              persistance=persistance,
+        #                                                              save_best=save_best)
 
+        # load parameters from "best" epoch (possibly from mini batch, so might not reflect full data)
         if save_best:
             gpflow.utilities.multiple_assign(self.model, params)
 
         # consider a successful optimisation of stopped early (with early stop being on)
-        success = stopped_early if early_stop else np.nan
-        return {"success": success}
+        success = stopped_early if stopped_early else np.nan
+        return {"success": success, "elbo": logf}
 
 
 
@@ -1436,7 +1519,8 @@ class SeaIceFreeboard(DataLoader):
             file_suffix="",
             post_process=None,
             print_every=100,
-            inducing_point_params=None):
+            inducing_point_params=None,
+            optimise_params=None):
         """
         wrapper function to run optimal interpolation of sea ice freeboard for a given date
         """
@@ -1458,6 +1542,9 @@ class SeaIceFreeboard(DataLoader):
 
         if inducing_point_params is None:
             inducing_point_params = {}
+
+        if optimise_params is None:
+            optimise_params = {}
 
         # TODO: refactor getting min_obs_for_svgp from inducing_point_params - review how it's used down stream
         min_obs_for_svgp = inducing_point_params.get("min_obs_for_svgp", 1000)
@@ -1723,6 +1810,9 @@ class SeaIceFreeboard(DataLoader):
                                                                      y=y_,
                                                                      incl_rad=incl_rad)
 
+            if self.verbose > 2:
+                print(f"number of inputs/outputs: {len(outputs)}")
+
             # TODO: move this into a method
             # too few inputs?
             if len(inputs) < min_inputs:
@@ -1808,7 +1898,7 @@ class SeaIceFreeboard(DataLoader):
 
             if optimise:
                 t0_opt = time.time()
-                opt_hyp = self.optimise(scale_hyperparams=False)
+                opt_hyp = self.optimise(scale_hyperparams=False, **optimise_params)
                 t1_opt = time.time()
                 opt_runtime = t1_opt - t0_opt
             else:
