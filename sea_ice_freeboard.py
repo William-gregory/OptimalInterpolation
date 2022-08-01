@@ -18,6 +18,7 @@ from scipy.stats import shapiro, norm
 
 import tensorflow as tf
 import tensorflow_probability as tfp
+from tensorflow.python.client import device_lib
 
 from OptimalInterpolation import get_data_path
 from OptimalInterpolation.data_dict import DataDict, match, to_array
@@ -157,6 +158,26 @@ class SeaIceFreeboard(DataLoader):
 
         # random number generator - used for selecting inducing points
         self.rnd = np.random.default_rng(seed=rng_seed)
+
+        # ----
+        # devices - get info on GPU
+        # ---
+
+        dev = device_lib.list_local_devices()
+        gpu_name = None
+        for d in dev:
+            # check if device is GPU
+            # - will break after first
+            if d.device_type == "GPU":
+                print("found GPU")
+                try:
+                    name_loc = re.search("name:(.*?),", d.physical_device_desc).span(0)
+                    gpu_name = d.physical_device_desc[(name_loc[0] + 6):(name_loc[1] - 1)]
+                except Exception as e:
+                    print("there was some issue getting GPU name")
+                    print(e)
+                break
+        self.gpu_name = gpu_name
 
     def select_obs_date(self, date, days_ahead=4, days_behind=4):
         """select observation for a specific date, store as obs_date attribute"""
@@ -1989,6 +2010,7 @@ class SeaIceFreeboard(DataLoader):
                 "output_mean": np.mean(outputs),
                 "output_std": np.std(outputs),
                 "engine": self.engine,
+                "gpu_name": self.gpu_name,
                 **center_pred,
                 **opt_hyp,
                 "run_time": t1 - t0,
