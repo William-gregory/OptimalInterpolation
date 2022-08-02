@@ -604,24 +604,24 @@ class DataLoader():
         # assert file in ["results.csv", "prediction.csv"], f"file: {file} not valid"
         # assert file in os.listdir(results_dir), f"file: {file} is not in results_dir:\n{results_dir}"
 
-
-        if data_cols is None:
-            if self.verbose:
-                print("data_cols not provided, getting default values ")
-            if re.search("^results", file):
-                data_cols = ['x', 'y', 'lon', 'lat',
-                             'num_inputs', 'optimise_success',# "run_time",
-                             "marginal_loglikelihood",
-                             "ls_x", "ls_y", "ls_t",
-                             "kernel_variance", "likelihood_variance",
-                             ]
-            # otherwise expect predictions
-            else:
-                # data_cols =['f*', 'f*_var', 'y', 'y_var', 'grid_loc_0', 'grid_loc_1', 'proj_loc_0', 'proj_loc_1',
-                #             'mean', 'date', 'xs_x', 'xs_y', 'xs_t', 'run_time']
-                data_cols = ['f*', 'f*_var', 'y', 'y_var', 'mean',
-                             'xs_x', 'xs_y', 'xs_t', #'run_time'
-                             ]
+        if data_cols is not None:
+            print("data_cols provided but it is not used")
+            # if self.verbose:
+            #     print("data_cols not provided, getting default values ")
+            # if re.search("^results", file):
+            #     data_cols = ['x', 'y', 'lon', 'lat',
+            #                  'num_inputs', 'optimise_success',# "run_time",
+            #                  "marginal_loglikelihood",
+            #                  "ls_x", "ls_y", "ls_t",
+            #                  "kernel_variance", "likelihood_variance",
+            #                  ]
+            # # otherwise expect predictions
+            # else:
+            #     # data_cols =['f*', 'f*_var', 'y', 'y_var', 'grid_loc_0', 'grid_loc_1', 'proj_loc_0', 'proj_loc_1',
+            #     #             'mean', 'date', 'xs_x', 'xs_y', 'xs_t', 'run_time']
+            #     data_cols = ['f*', 'f*_var', 'y', 'y_var', 'mean',
+            #                  'xs_x', 'xs_y', 'xs_t', #'run_time'
+            #                  ]
 
         assert os.path.exists(results_dir)
 
@@ -711,10 +711,10 @@ class DataLoader():
         rdf = pd.concat(res_list)
         rdf['date'] = rdf['date'].astype(str)
 
-        if data_cols is not None:
-            miss_data_cols = np.array(data_cols)[~np.in1d(data_cols, rdf.columns)]
-
-            assert len(miss_data_cols) == 0, f"data_cols: {miss_data_cols} not in data"
+        # if data_cols is not None:
+        #     miss_data_cols = np.array(data_cols)[~np.in1d(data_cols, rdf.columns)]
+        #
+        #     assert len(miss_data_cols) == 0, f"data_cols: {miss_data_cols} not in data"
 
         dim_cols = ["grid_loc_0", "grid_loc_1", "date"]
         dims = {dc: rdf[dc].values for dc in dim_cols}

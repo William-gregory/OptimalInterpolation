@@ -546,13 +546,13 @@ class SeaIceFreeboard(DataLoader):
         # require inputs are 2-d
         # TODO: consider if checking shape should be done here,
         if len(self.x.shape) == 1:
-            if self.verbose > 1:
+            if self.verbose > 3:
                 print("inputs was 1-d, broadcasting to make 2-d")
             self.x = self.x[:, None]
 
         # require outputs are 2-d
         if len(self.y.shape) == 1:
-            if self.verbose > 1:
+            if self.verbose > 3:
                 print("outputs was 1-d, broadcasting to make 2-d")
             self.y = self.y[:, None]
 
@@ -573,14 +573,14 @@ class SeaIceFreeboard(DataLoader):
             f"scale_inputs did not match expected length: {self.x.shape[1]}"
 
         self.scale_inputs = scale_inputs
-        if self.verbose > 1:
+        if self.verbose > 3:
             print(f"scaling inputs by: {scale_inputs}")
         self.x *= scale_inputs
 
         if scale_outputs is None:
             scale_outputs = np.array([1.0])
         self.scale_outputs = scale_outputs
-        if self.verbose > 1:
+        if self.verbose > 3:
             print(f"scaling outputs by: {scale_outputs}")
         self.y *= scale_outputs
 
@@ -1139,8 +1139,8 @@ class SeaIceFreeboard(DataLoader):
             # return logf, params, best_step, stopped_early
 
         t1 = time.time()
-        if self.verbose:
-            print(f"opt run time: {t1-t0:.2f}s")
+        if self.verbose > 3:
+            print(f"opt run time for svgp: {t1-t0:.2f}s")
         # run adam optimizer
         # TODO: add print statements (for a given verbose level)
         # logf, params, best_step, stopped_early = self._svgp_run_adam(model=self.model,
@@ -1153,6 +1153,8 @@ class SeaIceFreeboard(DataLoader):
 
         # load parameters from "best" epoch (possibly from mini batch, so might not reflect full data)
         if save_best:
+            if self.verbose > 3:
+                print("loading 'best' parameters found")
             gpflow.utilities.multiple_assign(self.model, params)
 
         # consider a successful optimisation of stopped early (with early stop being on)
@@ -2094,13 +2096,16 @@ class SeaIceFreeboard(DataLoader):
         # read results - hyper parameters values, log likelihood
         # --
 
-        res = self.read_results(res_dir,
-                                file=results_file,
-                                grid_res_loc=grid_res,
-                                grid_size=big_grid_size,
-                                unflatten=True,
-                                dates=dates, file_suffix=file_suffix,
-                                data_cols=results_data_cols)
+        if results_file is not None:
+            res = self.read_results(res_dir,
+                                    file=results_file,
+                                    grid_res_loc=grid_res,
+                                    grid_size=big_grid_size,
+                                    unflatten=True,
+                                    dates=dates, file_suffix=file_suffix,
+                                    data_cols=results_data_cols)
+        else:
+            res = {}
 
         # --
         # read predictions - f*, f*_var, etc
@@ -2108,14 +2113,17 @@ class SeaIceFreeboard(DataLoader):
 
         # TODO: at some point this will not be needed because  f*, f*_var, etc
         #  is now stored in 'results' (i.e. with hyper parameter)
-        pre = self.read_results(res_dir,
-                                file=predictions_file,
-                                grid_res_loc=grid_res,
-                                grid_size=big_grid_size,
-                                unflatten=True,
-                                dates=dates,
-                                file_suffix=file_suffix,
-                                data_cols=preds_data_cols)
+        if predictions_file is not None:
+            pre = self.read_results(res_dir,
+                                    file=predictions_file,
+                                    grid_res_loc=grid_res,
+                                    grid_size=big_grid_size,
+                                    unflatten=True,
+                                    dates=dates,
+                                    file_suffix=file_suffix,
+                                    data_cols=preds_data_cols)
+        else:
+            pre = {}
 
         # ---
         # combine dicts
