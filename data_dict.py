@@ -249,6 +249,7 @@ class DataDict(dict):
             return DataDict(vals=self.vals, dims=dims, name=self.name, is_flat=self.flat)
 
     def fill_value(self, fill, select_array=None, select_dims=None):
+        """populate vals will 'fill' for given select_array or select_dims"""
         if select_array is not None:
             assert isinstance(select_array, np.ndarray), \
                 f"select_array should be an array, got: {type(select_array)}"

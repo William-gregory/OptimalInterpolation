@@ -257,6 +257,7 @@ class SeaIceFreeboard(DataLoader):
             select_array = np.in1d(self.obs_date.dims['sat'], hold_out) & \
                            (self.obs_date.dims['t'] < 0.5) & \
                            (self.obs_date.dims['t'] >= -0.5)
+            self.obs_date['held_out'] = self.obs_date.subset(select_array=select_array).copy()
             self.obs_date.fill_value(fill=np.nan, select_array=select_array)
         else:
             select_dims = {"sat": hold_out, "t": t}
@@ -326,6 +327,7 @@ class SeaIceFreeboard(DataLoader):
             assert isinstance(min_sie, (float, int))
             sie_bool = self.sie.vals >= min_sie
 
+        # TODO: move removing nans into remove_hold_out_obs_date()
         select_array = (~np.isnan(self.obs_date.vals))
         if not self.obs_date['raw_data']:
             select_array = select_array & sie_bool
@@ -1167,20 +1169,53 @@ class SeaIceFreeboard(DataLoader):
                                    coarse_grid_spacing=1,
                                    flatten=True):
         """get x,y location about some grid location"""
-        gl0 = grid_loc[0] + np.arange(-coarse_grid_spacing, coarse_grid_spacing + 1)
-        gl1 = grid_loc[1] + np.arange(-coarse_grid_spacing, coarse_grid_spacing + 1)
 
-        # trim to be in grid range
-        gl0 = gl0[(gl0 >= 0) & (gl0 < self.aux['y'].vals.shape[1])]
-        gl1 = gl1[(gl1 >= 0) & (gl1 < self.aux['x'].vals.shape[1])]
+        # if not using_raw data select values
+        if not self.obs_date['raw_data']:
+            gl0 = grid_loc[0] + np.arange(-coarse_grid_spacing, coarse_grid_spacing + 1)
+            gl1 = grid_loc[1] + np.arange(-coarse_grid_spacing, coarse_grid_spacing + 1)
 
-        gl0, gl1 = np.meshgrid(gl0, gl1)
+            # trim to be in grid range
+            gl0 = gl0[(gl0 >= 0) & (gl0 < self.aux['y'].vals.shape[1])]
+            gl1 = gl1[(gl1 >= 0) & (gl1 < self.aux['x'].vals.shape[1])]
 
-        # location to predict on
-        x_pred = self.aux['x'].vals[gl0, gl1]
-        y_pred = self.aux['y'].vals[gl0, gl1]
+            gl0, gl1 = np.meshgrid(gl0, gl1)
 
-        out = [x_pred, y_pred, gl0, gl1]
+            # location to predict on
+            x_pred = self.aux['x'].vals[gl0, gl1]
+            y_pred = self.aux['y'].vals[gl0, gl1]
+            t_pred = np.zeros(len(x_pred))
+
+        else:
+            # get the x,y valyes
+            x, y = self.aux['x'].vals[grid_loc], self.aux['y'].vals[grid_loc]
+
+            gr = self.grid_res
+            # if grid_res is a string - i.e. expect 50km
+            if isinstance(gr, str):
+                gr = int(re.sub("\D", "", gr))
+            # half of the interval - assuming x,y is at center of square
+            half_ival = (gr * 1000) / 2
+
+            hdims = self.obs_date['held_out'].dims
+            b = (hdims['x'] >= (x - half_ival)) & \
+                (hdims['x'] < (x + half_ival)) & \
+                (hdims['y'] >= (y - half_ival)) & \
+                (hdims['y'] < (y + half_ival))
+
+            x_pred = hdims['x'][b]
+            y_pred = hdims['y'][b]
+            t_pred = hdims['t'][b]
+
+            # add prediction at center
+            x_pred = np.concatenate([x_pred, np.array([x])])
+            y_pred = np.concatenate([y_pred, np.array([y])])
+            t_pred = np.concatenate([t_pred, np.array([0])])
+
+            gl0, gl1 = np.full(x_pred.shape, np.nan), np.full(x_pred.shape, np.nan)
+
+        out = [x_pred, y_pred, t_pred, gl0, gl1]
+
         if flatten:
             return [_.flatten() for _ in out]
         else:
@@ -1716,8 +1751,13 @@ class SeaIceFreeboard(DataLoader):
 
         else:
             try:
-                prior_rdf = pd.read_csv(os.path.join(date_dir, result_file))
-                prior_rdf = prior_rdf[["grid_loc_0", "grid_loc_1"]]
+                # TODO: allow this
+                if optimise:
+                    prior_rdf = pd.read_csv(os.path.join(date_dir, result_file))
+                    prior_rdf = prior_rdf[["grid_loc_0", "grid_loc_1"]]
+                else:
+                    print(f"overwrite={overwrite} but optimise={optimise}, "
+                          f"will load params (if available) and generated predictions")
             except FileNotFoundError as e:
                 print(f"previous result_file: {result_file}")
 
@@ -1945,11 +1985,12 @@ class SeaIceFreeboard(DataLoader):
             # ---
 
             # TODO: predict in region around center point
-            x_pred, y_pred, gl0, gl1 = self.get_neighbours_of_grid_loc(grid_loc,
+            x_pred, y_pred, t_pred, gl0, gl1 = self.get_neighbours_of_grid_loc(grid_loc,
                                                                        coarse_grid_spacing=coarse_grid_spacing)
 
             preds = self.predict_freeboard(x=x_pred,
-                                           y=y_pred)
+                                           y=y_pred,
+                                           t=t_pred)
 
             # ----
             # store model parameters
@@ -1992,8 +2033,13 @@ class SeaIceFreeboard(DataLoader):
             ln, lt = EASE2toWGS84_New(x_, y_)
 
             # store predictions at 'center' location in results
-            center_loc_bool = (preds['proj_loc_0'] == preds['grid_loc_0']) & (
-                        preds['proj_loc_1'] == preds['grid_loc_1'])
+            # center_loc_bool = (preds['proj_loc_0'] == preds['grid_loc_0']) & (
+            #             preds['proj_loc_1'] == preds['grid_loc_1'])
+
+            # get the center of grid prediction
+            center_loc_bool = (xs[:, 0] == (x_ * self.scale_inputs[0])) & \
+                              (xs[:, 1] == (y_ * self.scale_inputs[1])) & \
+                              (xs[:, 2] == (0 * self.scale_inputs[2]))
 
             center_pred = {_: preds[_][center_loc_bool] if isinstance(preds[_], np.ndarray) else np.array([preds[_]])
                            for _ in ["f*", "f*_var", "y_var", "mean", "fyi_mean"]}
