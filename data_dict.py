@@ -459,6 +459,8 @@ class DataDict(dict):
 
     def unflatten(self, inplace=False, fill_val=np.nan, udims=None, verbose=False):
 
+        # TODO: consider better defaults for different dtypes nan, '', 0, etc
+
         if self.flat:
             # for each dimension get the unique values
             if udims is None:
@@ -480,7 +482,14 @@ class DataDict(dict):
             shape = [len(v) for k, v in udims.items()]
             # create an nd-array to populate
             # NOTE: the fill_val and dtype must be compatible, e.g. np.nan and float
-            vals = np.full(shape, fill_val, dtype=self.vals.dtype)
+            if self.vals.dtype == type(fill_val):
+                vals = np.full(shape, fill_val, dtype=self.vals.dtype)
+            # else self.vals.dtype is not compatible with fill_val (i.e. int vs float)
+            # - so just use fill_val
+            else:
+                if verbose:
+                    print(f"changing dtype to match fill_val: {type(fill_val)}")
+                vals = np.full(shape, fill_val, dtype='object')
             # get the locations of the dim values in unique positions
             locs = [match(v, udims[k]) for k, v in self.dims.items()]
             # fill nd-array at correct locations
