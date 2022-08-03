@@ -1964,8 +1964,10 @@ class SeaIceFreeboard(DataLoader):
                 opt_hyp = self.optimise(scale_hyperparams=False, **optimise_params)
                 t1_opt = time.time()
                 opt_runtime = t1_opt - t0_opt
+                if self.verbose > 2:
+                    print(f"opt_runtime: {opt_runtime}")
             else:
-                if self.verbose > 1:
+                if self.verbose > 2:
                     print("not optimising hyper parameters")
                 opt_hyp = self.get_hyperparameters(scale_hyperparams=False)
                 opt_hyp["marginal_loglikelihood"] = self.get_marginal_log_likelihood()
