@@ -597,7 +597,8 @@ class SeaIceFreeboard(DataLoader):
         # length_scales = self._float_list_to_array(length_scales)
         length_scales, = to_array(length_scales)
 
-        if self.verbose > 1:
+        if self.verbose > 3:
+            print("initial hyper parameter values")
             print(f"length_scale: {length_scales}")
             print(f"kernel_var: {kernel_var}")
             print(f"likelihood_var: {likeli_var}")
