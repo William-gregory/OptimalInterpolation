@@ -1184,7 +1184,7 @@ class SeaIceFreeboard(DataLoader):
             # location to predict on
             x_pred = self.aux['x'].vals[gl0, gl1]
             y_pred = self.aux['y'].vals[gl0, gl1]
-            t_pred = np.zeros(len(x_pred))
+            t_pred = np.zeros(x_pred.shape)
 
         else:
             # get the x,y valyes
@@ -1666,11 +1666,12 @@ class SeaIceFreeboard(DataLoader):
         if hold_out is None:
             hold_out_str = ""
         elif isinstance(hold_out, str):
-            hold_out_str = hold_out
+            hold_out_str = re.sub("_", "", hold_out)
         else:
-            hold_out_str = '|'.join(hold_out)
-        # hold_out_str = "" if hold_out is None else '|'.join(hold_out)
-        tmp_dir = f"radius{incl_rad}_daysahead{days_ahead}_daysbehind{days_behind}_gridres{grid_res}_season{season}_coarsegrid{coarse_grid_spacing}_holdout{hold_out_str}_boundls{bound_length_scales}"
+            hold_out_str = '|'.join([re.sub("_", "", ho) for ho in hold_out])
+        # remove underscores from prior mean - just to include in output directory
+        priomean_str = re.sub('_', "", prior_mean_method)
+        tmp_dir = f"radius{incl_rad}_daysahead{days_ahead}_daysbehind{days_behind}_gridres{grid_res}_season{season}_coarsegrid{coarse_grid_spacing}_holdout{hold_out_str}_boundls{bound_length_scales}_meanMeth{priomean_str}"
 
         print(f"will write results to subdir of output_dir:\n {tmp_dir}")
         output_dir = os.path.join(output_dir, tmp_dir)
@@ -1730,6 +1731,13 @@ class SeaIceFreeboard(DataLoader):
         pred_file = os.path.join(date_dir, prediction_file)
         # bad results will be written to
         skip_file = os.path.join(date_dir, skipped_file)
+
+        # dictionary of full path to files will be returned by run method
+        output_files = {
+            "results": res_file,
+            "predictions": pred_file,
+            "skipped": skip_file
+        }
 
         # ---
         # move files to archive, if they already exist
@@ -1965,7 +1973,7 @@ class SeaIceFreeboard(DataLoader):
                 t1_opt = time.time()
                 opt_runtime = t1_opt - t0_opt
                 if self.verbose > 2:
-                    print(f"opt_runtime: {opt_runtime}")
+                    print(f"opt_runtime: {opt_runtime:.2f}s")
             else:
                 if self.verbose > 2:
                     print("not optimising hyper parameters")
@@ -2114,7 +2122,7 @@ class SeaIceFreeboard(DataLoader):
         with open(os.path.join(output_dir, "total_runtime.txt"), "+w") as f:
             f.write(f"runtime: {t_total1 - t_total0:.2f} seconds")
 
-        return all_res, all_preds
+        return all_res, all_preds, output_files
 
     def get_results_from_dir(self,
                              res_dir,
@@ -2241,7 +2249,10 @@ class SeaIceFreeboard(DataLoader):
         # store results in list
         z_list = []
         dif_list = []
+        ystd_list = []
         stat_list = []
+        llz_list = []
+        ll_list = []
 
         for date in prev_results['f*'].dims['date']:
 
@@ -2260,11 +2271,14 @@ class SeaIceFreeboard(DataLoader):
 
             # extract numpy array, squeeze date dim
             fs = np.squeeze(fs.vals)
-            y_var = np.squeeze(y_var.vals)
+            y_std = np.sqrt(np.squeeze(y_var.vals))
 
             # evaluate each held out satellite data
             z_tmp = []
             dif_tmp = []
+            ystd_tmp = []
+            llz_tmp = []
+            ll_tmp = []
             for ho in hold_out:
                 # select the data for a held out satellite data
                 hold_dims = {"date": date, "sat": ho}
@@ -2275,7 +2289,7 @@ class SeaIceFreeboard(DataLoader):
                 dif = (obs - fs)
                 # normalised
 
-                z = dif / np.sqrt(y_var)
+                z = dif / y_std
                 # test statistic
                 # TODO: add more test statistics for cross val?
                 z_non_nan = ~np.isnan(z)
@@ -2286,7 +2300,7 @@ class SeaIceFreeboard(DataLoader):
                 # log likelihood with variable sigma (variance)
                 ll = norm.logpdf(dif[z_non_nan],
                                  loc=0,
-                                 scale=np.sqrt(y_var[z_non_nan]))
+                                 scale=y_std[z_non_nan])
 
                 stats = {
                     "date": date,
@@ -2294,32 +2308,53 @@ class SeaIceFreeboard(DataLoader):
                     "shapiro_statistic": c.statistic,
                     "shaprio_pvalue": c.pvalue,
                     "log_likelihood": ll.sum(),
-                    # "log_likelihood_z": ll_z.sum(),
+                    "log_likelihood_z": ll_z.sum(),
                     "num_obs": z_non_nan.sum()
                 }
                 stat_list.append(stats)
 
                 # store the differences as DataDicts, then in list
-                _ = DataDict(vals=z, name=ho)
+                _ = DataDict(vals=z, name=ho, default_dim_name="grid_loc_")
                 z_tmp.append(_)
-                _ = DataDict(vals=dif, name=ho)
+                _ = DataDict(vals=dif, name=ho, default_dim_name="grid_loc_")
                 dif_tmp.append(_)
+                _ = DataDict(vals=y_std, name=ho, default_dim_name="grid_loc_")
+                ystd_tmp.append(_)
+                # NOTE: here the using idx because arrays are 1-d, instead of the 2-d above
+                _ = DataDict(vals=ll_z, name=ho, default_dim_name="idx")
+                llz_tmp.append(_)
+                _ = DataDict(vals=ll, name=ho, default_dim_name="idx")
+                ll_tmp.append(_)
 
             # concatenate across the different satellites in hold_out (could just be 1)
             _ = DataDict.concatenate(*z_tmp, dim_name='sat', name=date, verbose=False)
             z_list.append(_)
             _ = DataDict.concatenate(*dif_tmp, dim_name='sat', name=date, verbose=False)
             dif_list.append(_)
+            _ = DataDict.concatenate(*ystd_tmp, dim_name='sat', name=date, verbose=False)
+            ystd_list.append(_)
+            _ = DataDict.concatenate(*llz_tmp, dim_name='sat', name=date, verbose=False)
+            llz_list.append(_)
+            _ = DataDict.concatenate(*ll_tmp, dim_name='sat', name=date, verbose=False)
+            ll_list.append(_)
+
 
         # concatenate across dates
-        zdd = DataDict.concatenate(*z_list, dim_name='date', name='norm_diff')
-        difdd = DataDict.concatenate(*dif_list, dim_name='date', name="diff")
+        zdd = DataDict.concatenate(*z_list, dim_name='date', name='norm_diff', verbose=False)
+        difdd = DataDict.concatenate(*dif_list, dim_name='date', name="diff", verbose=False)
+        ystddd = DataDict.concatenate(*ystd_list, dim_name='date', name="y_std", verbose=False)
+        llzdd = DataDict.concatenate(*llz_list, dim_name='date', name="y_std", verbose=False)
+        lldd = DataDict.concatenate(*ll_list, dim_name='date', name="y_std", verbose=False)
+
 
         # return a dictionary of results
         out = {
             "stats": pd.DataFrame(stat_list),
             "diff": difdd,
-            "z": zdd
+            "z": zdd,
+            "y_std": ystddd,
+            "ll_z": llzdd,
+            "ll": lldd
         }
         return out
 
