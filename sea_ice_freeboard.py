@@ -1551,6 +1551,32 @@ class SeaIceFreeboard(DataLoader):
                                                                 std=std)
         return hp_date
 
+    @staticmethod
+    def make_temp_dir(incl_rad,
+                      days_ahead,
+                      days_behind,
+                      grid_res,
+                      season,
+                      coarse_grid_spacing,
+                      hold_out,
+                      bound_length_scales,
+                      prior_mean_method):
+
+        if hold_out is None:
+            hold_out_str = ""
+        elif isinstance(hold_out, str):
+            hold_out_str = re.sub("_", "", hold_out)
+        else:
+            hold_out_str = '|'.join([re.sub("_", "", ho) for ho in hold_out])
+        # remove underscores from prior mean - just to include in output directory
+        priomean_str = re.sub('_', "", prior_mean_method)
+
+        tmp_dir = f"radius{incl_rad}_daysahead{days_ahead}_daysbehind{days_behind}_" \
+                  f"gridres{grid_res}_season{season}_coarsegrid{coarse_grid_spacing}_" \
+                  f"holdout{hold_out_str}_boundls{bound_length_scales}_meanMeth{priomean_str}"
+
+        return tmp_dir
+
     def run(self,
             date,
             output_dir,
@@ -1664,15 +1690,24 @@ class SeaIceFreeboard(DataLoader):
         # results_dir = output_dir
 
         # subdirectory in results dir, with name containing (some) run parameters
-        if hold_out is None:
-            hold_out_str = ""
-        elif isinstance(hold_out, str):
-            hold_out_str = re.sub("_", "", hold_out)
-        else:
-            hold_out_str = '|'.join([re.sub("_", "", ho) for ho in hold_out])
-        # remove underscores from prior mean - just to include in output directory
-        priomean_str = re.sub('_', "", prior_mean_method)
-        tmp_dir = f"radius{incl_rad}_daysahead{days_ahead}_daysbehind{days_behind}_gridres{grid_res}_season{season}_coarsegrid{coarse_grid_spacing}_holdout{hold_out_str}_boundls{bound_length_scales}_meanMeth{priomean_str}"
+        # if hold_out is None:
+        #     hold_out_str = ""
+        # elif isinstance(hold_out, str):
+        #     hold_out_str = re.sub("_", "", hold_out)
+        # else:
+        #     hold_out_str = '|'.join([re.sub("_", "", ho) for ho in hold_out])
+        # # remove underscores from prior mean - just to include in output directory
+        # priomean_str = re.sub('_', "", prior_mean_method)
+        # tmp_dir = f"radius{incl_rad}_daysahead{days_ahead}_daysbehind{days_behind}_gridres{grid_res}_season{season}_coarsegrid{coarse_grid_spacing}_holdout{hold_out_str}_boundls{bound_length_scales}_meanMeth{priomean_str}"
+        tmp_dir = self.make_temp_dir(incl_rad,
+                                     days_ahead,
+                                     days_behind,
+                                     grid_res,
+                                     season,
+                                     coarse_grid_spacing,
+                                     hold_out,
+                                     bound_length_scales,
+                                     prior_mean_method)
 
         print(f"will write results to subdir of output_dir:\n {tmp_dir}")
         output_dir = os.path.join(output_dir, tmp_dir)
