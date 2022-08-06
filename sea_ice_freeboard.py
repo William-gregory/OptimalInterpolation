@@ -1586,7 +1586,7 @@ class SeaIceFreeboard(DataLoader):
             priomean_str = re.sub('_', "", prior_mean_method)
         else:
             assert isinstance(prior_mean_method, dict), f"if prior_mean_method is not str, expect it to be dict"
-            priomean_str = f"rad{prior_mean_method['radius']}win{prior_mean_method['radius']}trail{prior_mean_method['trailing']}"
+            priomean_str = f"rad{prior_mean_method['radius']}win{prior_mean_method['window']}trail{prior_mean_method['trailing']}"
 
 
         tmp_dir = f"radius{incl_rad}_daysahead{days_ahead}_daysbehind{days_behind}_" \
