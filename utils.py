@@ -14,7 +14,7 @@ import subprocess
 import re
 import os
 import shutil
-
+import numba as nb
 
 def grid_proj(lon_0=0, boundinglat=60, llcrnrlon=False,
               llcrnrlat=False, urcrnrlon=False, urcrnrlat=False):
@@ -584,6 +584,45 @@ def date_str_to_datetime64(dates, format='%Y%m%d'):
              for d in dates]
     dates = np.array(dates, dtype='datetime64[D]')
     return dates
+
+
+
+@nb.jit(nopython=True)
+def rolling_mean(loc_obs, mean_array, window, trailing):
+    # calculate the rolling mean
+    # - if using trailing use up to (but excluding) the date
+    if trailing:
+        # if using a trailing window will only use prior days
+        for i in range(window, len(mean_array)):
+            # select date slice
+            _ = loc_obs[:, (i - window): i, :]
+            # if all are nan - i.e. missing, just forward fill (which could be nan)
+            # TODO: here could apply symmetric window by just adjusting i back
+            if np.isnan(_).all():
+                mean_array[i] = mean_array[i-1]
+            else:
+                mean_array[i] = np.nanmean(_)
+                # count_array[i] = (~np.isnan(_)).sum()
+    # otherwise use symmetric window
+    else:
+        days_ahead = days_behind = window // 2
+        # if window is even, make the days ahead one less
+        if window % 2 == 0:
+            days_ahead -= 1
+
+        for i in range(days_behind + 1, len(mean_array) - days_ahead):
+            # select date slice
+            _ = loc_obs[:, (i - days_behind-1): (i+days_ahead), :]
+            # if all are nan - i.e. missing, just forward fill (which could be nan)
+            if np.isnan(_).all():
+                mean_array[i] = mean_array[i-1]
+            else:
+                mean_array[i] = np.nanmean(_)
+                # count_array[i] = (~np.isnan(_)).sum()
+    return mean_array
+
+
+
 
 
 if __name__ == "__main__":

@@ -24,7 +24,8 @@ from OptimalInterpolation import get_data_path
 from OptimalInterpolation.data_dict import DataDict, match, to_array
 from OptimalInterpolation.data_loader import DataLoader
 from OptimalInterpolation.utils import WGS84toEASE2_New, \
-    EASE2toWGS84_New, SMLII_mod, SGPkernel, GPR, get_git_information, move_to_archive
+    EASE2toWGS84_New, SMLII_mod, SGPkernel, GPR, get_git_information, \
+    move_to_archive, rolling_mean
 
 from gpflow.mean_functions import Constant
 from gpflow.utilities import parameter_dict, multiple_assign
@@ -266,7 +267,7 @@ class SeaIceFreeboard(DataLoader):
     def prior_mean(self, date, method="fyi_average", **kwargs):
 
         valid_methods = ["fyi_average", "zero", "demean_outputs"]
-        assert method in valid_methods, f"method: {method} is not in valid_methods: {valid_methods}"
+        assert (method in valid_methods) | (isinstance(method, dict)), f"method: {method} is not in valid_methods: {valid_methods}"
 
         if method == "fyi_average":
             self._prior_mean_fyi_ave(date, **kwargs)
@@ -290,6 +291,18 @@ class SeaIceFreeboard(DataLoader):
                                       fill_val=0.,
                                       name="mean",
                                       default_dim_name="grid_loc_")
+
+        elif isinstance(method, dict):
+            assert not self.obs_date['raw_data'], "rolling prior mean not yet implemented for using raw data"
+            # this will calculate the rolling means for all the data - bit over kill
+            means = self.calc_fixed_grid_rolling_mean(method, verbose=self.verbose)
+
+            mean_date = means.subset({'date': date})
+
+            self.mean = DataDict(vals=np.squeeze(mean_date.vals),
+                                 name="mean",
+                                 default_dim_name="grid_loc_")
+
 
     def _prior_mean_fyi_ave(self, date, fyi_days_behind=9, fyi_days_ahead=-1):
         """calculate a trailing mean from first year sea ice data, in line with published paper"""
@@ -1569,7 +1582,12 @@ class SeaIceFreeboard(DataLoader):
         else:
             hold_out_str = '|'.join([re.sub("_", "", ho) for ho in hold_out])
         # remove underscores from prior mean - just to include in output directory
-        priomean_str = re.sub('_', "", prior_mean_method)
+        if isinstance(prior_mean_method, str):
+            priomean_str = re.sub('_', "", prior_mean_method)
+        else:
+            assert isinstance(prior_mean_method, dict), f"if prior_mean_method is not str, expect it to be dict"
+            priomean_str = f"rad{prior_mean_method['radius']}win{prior_mean_method['radius']}trail{prior_mean_method['trailing']}"
+
 
         tmp_dir = f"radius{incl_rad}_daysahead{days_ahead}_daysbehind{days_behind}_" \
                   f"gridres{grid_res}_season{season}_coarsegrid{coarse_grid_spacing}_" \
@@ -1689,16 +1707,6 @@ class SeaIceFreeboard(DataLoader):
         # TODO: tidy up how the sub-directory gets added to output dir
         # results_dir = output_dir
 
-        # subdirectory in results dir, with name containing (some) run parameters
-        # if hold_out is None:
-        #     hold_out_str = ""
-        # elif isinstance(hold_out, str):
-        #     hold_out_str = re.sub("_", "", hold_out)
-        # else:
-        #     hold_out_str = '|'.join([re.sub("_", "", ho) for ho in hold_out])
-        # # remove underscores from prior mean - just to include in output directory
-        # priomean_str = re.sub('_', "", prior_mean_method)
-        # tmp_dir = f"radius{incl_rad}_daysahead{days_ahead}_daysbehind{days_behind}_gridres{grid_res}_season{season}_coarsegrid{coarse_grid_spacing}_holdout{hold_out_str}_boundls{bound_length_scales}_meanMeth{priomean_str}"
         tmp_dir = self.make_temp_dir(incl_rad,
                                      days_ahead,
                                      days_behind,
@@ -2393,6 +2401,75 @@ class SeaIceFreeboard(DataLoader):
             "ll": lldd
         }
         return out
+
+    def _calc_rolling_mean(self, ID, grid_shape, window, trailing):
+
+        assert self.obs is not None, "obs attribute is None, can't take rolling mean"
+
+        # create a bool array of the locations within the radius
+        in_rad = np.full(np.prod(grid_shape), False)
+        in_rad[ID] = True
+        in_rad = in_rad.reshape(grid_shape)
+
+        # fill an array with rolling mean values
+        mean_array = np.full(len(self.obs.dims['date']), np.nan)
+        # count_array = np.full(len(sifb.obs.dims['date']), np.nan)
+
+        # get the obs for the given location
+        # NOTE: this will make a copy of data - could be slow?
+        loc_obs = self.obs.vals[in_rad, :, :]
+
+        return rolling_mean(loc_obs, mean_array, window, trailing)
+
+    def calc_fixed_grid_rolling_mean(self, method, verbose=False):
+
+        for _ in ['radius', 'window', 'trailing']:
+            assert _ in method, f"in prior_mean() - method is dict, is missing key: {_}"
+
+        radius = method['radius']
+        window = method['window']
+        trailing = method['trailing']
+
+        # TODO: wrap this up into a method onto it's own
+
+        # - will calculate for any location that has at least one obseravtion (at any time)
+        nan_obs = np.isnan(self.obs.vals)
+
+        # find grid locations that at least have one obs
+        has_obs = np.any(~nan_obs, axis=(2, 3))
+
+        mean_locs = np.where(has_obs)
+
+        mean_cube = np.full(self.obs.vals.shape[:3], np.nan)
+
+        # make a KDtree from all the location pairs
+        x_grid, y_grid = np.meshgrid(self.obs.dims['x'], self.obs.dims['y'])
+        xy_comb = np.concatenate([x_grid.flatten()[:, None], y_grid.flatten()[:, None]], axis=1)
+        xy_tree = scipy.spatial.cKDTree(xy_comb)
+
+        t0 = time.time()
+        for mloc in np.arange(has_obs.sum()):
+            # grid location to calculate mean
+            mean_loc = mean_locs[0][mloc], mean_locs[1][mloc]
+
+            # NOTE: in obs data the first dimension is associated with y values
+            x, y = self.obs.dims['x'][mean_loc[1]], self.obs.dims['y'][mean_loc[0]]
+
+            ID = xy_tree.query_ball_point(x=np.array([x, y]),
+                                          r=radius * 1000)
+
+            mean_array = self._calc_rolling_mean(ID, x_grid.shape, window, trailing)
+
+            # mean_array = calc_rolling_mean(x, y, window, radius, trailing, return_count=False)
+
+            mean_cube[mean_loc[0], mean_loc[1], :] = mean_array
+        t1 = time.time()
+        if verbose:
+            print(f"time to calc rolling mean: {t1-t0:.2f}s")
+
+        means = DataDict(vals=mean_cube, dims={k: v for k, v in self.obs.dims.items() if k != 'sat'}, name='mean')
+
+        return means
 
 
 if __name__ == "__main__":
