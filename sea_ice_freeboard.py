@@ -2387,8 +2387,8 @@ class SeaIceFreeboard(DataLoader):
         zdd = DataDict.concatenate(*z_list, dim_name='date', name='norm_diff', verbose=False)
         difdd = DataDict.concatenate(*dif_list, dim_name='date', name="diff", verbose=False)
         ystddd = DataDict.concatenate(*ystd_list, dim_name='date', name="y_std", verbose=False)
-        llzdd = DataDict.concatenate(*llz_list, dim_name='date', name="y_std", verbose=False)
-        lldd = DataDict.concatenate(*ll_list, dim_name='date', name="y_std", verbose=False)
+        llzdd = DataDict.concatenate(*[_.flatten() for _ in llz_list], dim_name='date', name="llz", verbose=False)
+        lldd = DataDict.concatenate(*[_.flatten() for _ in ll_list], dim_name='date', name="ll", verbose=False)
 
 
         # return a dictionary of results

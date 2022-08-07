@@ -663,11 +663,14 @@ class DataLoader():
 
             # check commit hash
             # - this could be to strict? however would expect results to be generated at same time
-            comm0 = config['run_info']['git_info']['details'][0]
-            comm1 = dconf['run_info']['git_info']['details'][0]
-            if (comm0 != comm1):
-                print(f"commits did not match, skipping date: {date}")
-                continue
+            if ('git_info' in config['run_info']) & ('git_info' in dconf['run_info']):
+                comm0 = config['run_info']['git_info']['details'][0]
+                comm1 = dconf['run_info']['git_info']['details'][0]
+                if (comm0 != comm1):
+                    print(f"commits did not match, skipping date: {date}")
+                    continue
+            else:
+                print("'git_info' not in 'run_info', not checking commit hash")
 
             print(date)
             # if file == "results.csv":
