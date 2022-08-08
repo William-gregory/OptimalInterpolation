@@ -1548,6 +1548,8 @@ class SeaIceFreeboard(DataLoader):
                 # --
                 # sie mask
                 # --
+                if self.verbose:
+                    print("applying clipping and smoothing")
                 # use SIE to create a mask when clipping and smoothing hyper parameters
                 sie_mask = self.sie.subset(select_dims={'date': date})
                 sie_mask = np.isnan(sie_mask.vals)
@@ -1555,6 +1557,8 @@ class SeaIceFreeboard(DataLoader):
 
                 # - be in 'post_process' config
                 for k in hp_date.keys():
+                    if self.verbose > 1:
+                        print(f"clip/smooth hyper params for date: {k}")
                     hp_date[k] = hp_date[k].clip_smooth_by_date(smooth_method=smooth_method,
                                                                 nan_mask=sie_mask,
                                                                 vmin=vmin_map[k] if isinstance(vmin_map,
@@ -1829,7 +1833,8 @@ class SeaIceFreeboard(DataLoader):
 
         hp_date = self.post_process(date=date,
                                     grid_res=grid_res,
-                                    std=50 / grid_res,
+                                    # std=50 / grid_res,
+                                    std=coarse_grid_spacing,
                                     **post_process)
 
         # --
@@ -1963,6 +1968,7 @@ class SeaIceFreeboard(DataLoader):
 
             # HACK: just skipping points where kernel_variance is missing
             #  - this would be from previously loaded data
+
             if np.isnan(hps['kernel_variance']):
                 if self.verbose:
                     print(f'kernel_variance is nan, skipping this (grid) location: {grid_loc}')
