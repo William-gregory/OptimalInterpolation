@@ -1876,22 +1876,28 @@ class SeaIceFreeboard(DataLoader):
         # store parameters (from GPflow) in dict
         param_dict = {}
 
+        # TODO: review loading of model parameters (for GPflow) - would want to use this when making predictions
         # TODO: tidy up the reading in of previous model parameters - make this into a method?
+        # TODO: storing parameters should be specific to this run
         # if the engine is not PurePython
-        if engine != "PurePython":
+        if (self.engine != "PurePython") & load_params:
             # load pre-existing model parameters, if they exist
-            prev_data_dir = post_process.get('prev_results_dir', None)
-            if prev_data_dir is not None:
-                prev_data_dir = os.path.join(prev_data_dir, date)
-                assert os.path.exists(prev_data_dir), f"prev_data_dir:\n{prev_data_dir}\nwas provide but does not exist"
-                prev_file_suffix = post_process.get("prev_file_suffix", "")
-                prev_param_file = os.path.join(prev_data_dir, f"params{prev_file_suffix}")
+            # prev_data_dir = post_process.get('prev_results_dir', None)
+            # params_data_dir =
+            # if prev_data_dir is not None:
+            # prev_data_dir = os.path.join(prev_data_dir, date)
+            # assert os.path.exists(prev_data_dir), f"prev_data_dir:\n{prev_data_dir}\nwas provide but does not exist"
+            # prev_file_suffix = post_process.get("prev_file_suffix", file_suffix)
+            # prev_param_file = os.path.join(prev_data_dir, f"params{prev_file_suffix}")
+            prev_param_file = os.path.join(date_dir, param_file)
+            if self.verbose:
+                print(f"reading previous params from:\n{prev_param_file}")
 
-                with shelve.open(prev_param_file) as sdb:
-                    for k in sdb.keys():
-                        if k not in param_dict:
-                            # NOTE: the keys in shelve objects are strings, expect them to be able to be converted to tuples
-                            param_dict[make_tuple(k)] = sdb[k]
+            with shelve.open(prev_param_file) as sdb:
+                for k in sdb.keys():
+                    if k not in param_dict:
+                        # NOTE: the keys in shelve objects are strings, expect them to be able to be converted to tuples
+                        param_dict[make_tuple(k)] = sdb[k]
 
                 print(f"loaded parameters for: {len(param_dict)} GP models")
 
