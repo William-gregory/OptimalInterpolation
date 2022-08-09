@@ -1990,20 +1990,35 @@ class SeaIceFreeboard(DataLoader):
             # build a GPR model for data
             # ---
 
-            self.build_gpr(inputs=inputs,
-                           outputs=outputs,
-                           scale_inputs=scale_inputs,
-                           scale_outputs=scale_outputs,
-                           length_scales=hps['length_scales'],
-                           kernel_var=hps['kernel_variance'],
-                           likeli_var=hps['likelihood_variance'],
-                           length_scale_lb=ls_lb,
-                           length_scale_ub=ls_ub,
-                           engine=engine,
-                           kernel=kernel,
-                           mean_function=mean_function,
-                           min_obs_for_svgp=min_obs_for_svgp,
-                           **inducing_point_params)
+            try:
+                self.build_gpr(inputs=inputs,
+                               outputs=outputs,
+                               scale_inputs=scale_inputs,
+                               scale_outputs=scale_outputs,
+                               length_scales=hps['length_scales'],
+                               kernel_var=hps['kernel_variance'],
+                               likeli_var=hps['likelihood_variance'],
+                               length_scale_lb=ls_lb,
+                               length_scale_ub=ls_ub,
+                               engine=engine,
+                               kernel=kernel,
+                               mean_function=mean_function,
+                               min_obs_for_svgp=min_obs_for_svgp,
+                               **inducing_point_params)
+            except Exception as e:
+                print("!" * 100 + f"\nExpection occurred when building model, error message:\n{e}\n" + "!" * 100 )
+
+                tmp = pd.DataFrame({"grid_loc_0": grid_loc[0],
+                                    "grid_loc_1": grid_loc[1],
+                                    "reason": str(e)},
+                                   index=[i])
+
+                tmp.to_csv(skip_file, mode='a',
+                           header=not os.path.exists(skip_file),
+                           index=False)
+                print("skipping")
+                continue
+
 
             # ----
             # load model parameters
