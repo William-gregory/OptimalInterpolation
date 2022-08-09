@@ -625,6 +625,7 @@ class SeaIceFreeboard(DataLoader):
         if (engine == "GPflow_svgp") & (len(self.x) <= min_obs_for_svgp):
             if self.verbose > 1:
                 print("too few entries for 'GPflow_svgp', will use 'GPflow'")
+                print(f"len(self.x): {len(self.x)} <= {min_obs_for_svgp} min_obs_for_svgp")
             engine = "GPflow"
 
         if engine == "GPflow":
