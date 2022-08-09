@@ -1627,7 +1627,8 @@ class SeaIceFreeboard(DataLoader):
             post_process=None,
             print_every=100,
             inducing_point_params=None,
-            optimise_params=None):
+            optimise_params=None,
+            skip_if_pred_exists=False):
         """
         wrapper function to run optimal interpolation of sea ice freeboard for a given date
         """
@@ -1811,6 +1812,11 @@ class SeaIceFreeboard(DataLoader):
                 if optimise:
                     prior_rdf = pd.read_csv(os.path.join(date_dir, result_file))
                     prior_rdf = prior_rdf[["grid_loc_0", "grid_loc_1"]]
+                elif skip_if_pred_exists:
+                    prior_rdf = pd.read_csv(os.path.join(date_dir, result_file))
+                    prior_rdf = prior_rdf[["grid_loc_0", "grid_loc_1"]]
+                    print(f"overwrite={overwrite}, optimise={optimise}, but skip_if_pred_exists={skip_if_pred_exists} "
+                          f"so will skip those entries that already have results")
                 else:
                     print(f"overwrite={overwrite} but optimise={optimise}, "
                           f"will load params (if available) and generated predictions")
