@@ -1668,7 +1668,8 @@ class SeaIceFreeboard(DataLoader):
         min_obs_for_svgp = inducing_point_params.get("min_obs_for_svgp", 1000)
         print(f"min_obs_for_svgp: {min_obs_for_svgp }")
         if "min_obs_for_svgp" in inducing_point_params:
-            inducing_point_params.pop("min_obs_for_svgp")
+            # inducing_point_params.pop("min_obs_for_svgp")
+            inducing_point_params = {k:v for k,v in inducing_point_params.items() if k != "min_obs_for_svgp"}
 
         # ----
         # get the input parameters
