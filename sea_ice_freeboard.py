@@ -180,13 +180,13 @@ class SeaIceFreeboard(DataLoader):
                 break
         self.gpu_name = gpu_name
 
-    def select_obs_date(self, date, days_ahead=4, days_behind=4):
+    def select_obs_date(self, date, days_ahead=4, days_behind=4, use_raw_data=False):
         """select observation for a specific date, store as obs_date attribute"""
 
         assert self.aux is not None, f"aux attribute is None, run load_data() or load_aux_data()"
         assert self.obs is not None, f"obs attribute is None, run load_data() or load_obs_data()"
 
-        if self.raw_obs is None:
+        if not use_raw_data:
             print("selecting data from gridded observations (raw_obs is None)")
             # select subset of obs date
             t_range = np.arange(-days_behind, days_ahead + 1)
@@ -460,12 +460,16 @@ class SeaIceFreeboard(DataLoader):
                                    days_behind,
                                    hold_out=None,
                                    prior_mean_method="fyi_average",
-                                   min_sie=None):
-
+                                   min_sie=None,
+                                   use_raw_data=False):
+        # TODO: allow to be explict of which data to use - raw or not
         # select data for a given date (include some days ahead / behind)
         self.select_obs_date(date,
                              days_ahead=days_ahead,
-                             days_behind=days_behind)
+                             days_behind=days_behind,
+                             use_raw_data=use_raw_data)
+
+        assert self.obs_date['raw_data'] == use_raw_data, f"obs_date['raw_data']={self.obs_date['raw_data']} != {use_raw_data}=use_raw_data "
 
         # set values on date for hold_out (satellites) to nan
         self.remove_hold_out_obs_date(hold_out=hold_out)
@@ -1628,10 +1632,14 @@ class SeaIceFreeboard(DataLoader):
             print_every=100,
             inducing_point_params=None,
             optimise_params=None,
-            skip_if_pred_exists=False):
+            skip_if_pred_exists=False,
+            use_raw_data=False):
         """
         wrapper function to run optimal interpolation of sea ice freeboard for a given date
         """
+
+        if use_raw_data:
+            assert self.raw_obs is not None, f"use_raw_data={use_raw_data}, but attribute: raw_obs={self.raw_obs}"
 
         # TODO: move min_obs_for_svgp into inducing_point_params
         # TODO: allow reading from previous results - for intialisation
@@ -1853,7 +1861,8 @@ class SeaIceFreeboard(DataLoader):
                                         days_behind=days_behind,
                                         hold_out=hold_out,
                                         prior_mean_method=prior_mean_method,
-                                        min_sie=None)
+                                        min_sie=None,
+                                        use_raw_data=use_raw_data)
 
         # ----
         # locations to calculate GP on
