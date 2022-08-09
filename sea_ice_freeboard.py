@@ -1633,7 +1633,8 @@ class SeaIceFreeboard(DataLoader):
             inducing_point_params=None,
             optimise_params=None,
             skip_if_pred_exists=False,
-            use_raw_data=False):
+            use_raw_data=False,
+            tmp_dir = None):
         """
         wrapper function to run optimal interpolation of sea ice freeboard for a given date
         """
@@ -1664,6 +1665,7 @@ class SeaIceFreeboard(DataLoader):
 
         # TODO: refactor getting min_obs_for_svgp from inducing_point_params - review how it's used down stream
         min_obs_for_svgp = inducing_point_params.get("min_obs_for_svgp", 1000)
+        print(f"min_obs_for_svgp: {min_obs_for_svgp }")
         if "min_obs_for_svgp" in inducing_point_params:
             inducing_point_params.pop("min_obs_for_svgp")
 
@@ -1720,15 +1722,19 @@ class SeaIceFreeboard(DataLoader):
         # TODO: tidy up how the sub-directory gets added to output dir
         # results_dir = output_dir
 
-        tmp_dir = self.make_temp_dir(incl_rad,
-                                     days_ahead,
-                                     days_behind,
-                                     grid_res,
-                                     season,
-                                     coarse_grid_spacing,
-                                     hold_out,
-                                     bound_length_scales,
-                                     prior_mean_method)
+        # allow 'tmp_dir' to be provided as input
+        if tmp_dir is None:
+            tmp_dir = self.make_temp_dir(incl_rad,
+                                         days_ahead,
+                                         days_behind,
+                                         grid_res,
+                                         season,
+                                         coarse_grid_spacing,
+                                         hold_out,
+                                         bound_length_scales,
+                                         prior_mean_method)
+        else:
+            assert isinstance(tmp_dir, str), f"tmp_dir provide but is not str, it's type {type(tmp_dir)}"
 
         print(f"will write results to subdir of output_dir:\n {tmp_dir}")
         output_dir = os.path.join(output_dir, tmp_dir)
@@ -1910,6 +1916,7 @@ class SeaIceFreeboard(DataLoader):
 
             with shelve.open(prev_param_file) as sdb:
                 for k in sdb.keys():
+                    # print(k)
                     if k not in param_dict:
                         # NOTE: the keys in shelve objects are strings, expect them to be able to be converted to tuples
                         param_dict[make_tuple(k)] = sdb[k]
