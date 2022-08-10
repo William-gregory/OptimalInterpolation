@@ -1549,7 +1549,7 @@ class SeaIceFreeboard(DataLoader):
         return select_bool
 
     @staticmethod
-    def hyper_params_for_date(date, prev_res=None, dims=None, length_scale_name=None):
+    def hyper_params_for_date(date, prev_res=None, dims=None, length_scale_name=None, default_val=1.0):
         # TODO: change hyper_params_for_date from a static method
         assert date is not None
         out = {}
@@ -1577,7 +1577,7 @@ class SeaIceFreeboard(DataLoader):
             var_keys = ['kernel_variance', "likelihood_variance"]
             for _ in ls_keys + var_keys:
                 # NOTE: this could be inefficient if dates in dim is big
-                out[_] = DataDict.full(dims=dims, fill_val=1.0, name=_).subset(select_dims)
+                out[_] = DataDict.full(dims=dims, fill_val=default_val, name=_).subset(select_dims)
 
         return out
 
@@ -1623,6 +1623,7 @@ class SeaIceFreeboard(DataLoader):
 
     def post_process(self,
                      date,
+                     current_date=None,
                      prev_results_file=None,
                      prev_results_dir=None,
                      clip_and_smooth=False,
@@ -1634,33 +1635,34 @@ class SeaIceFreeboard(DataLoader):
                      big_grid_size=360,
                      prev_file_suffix=None):
 
-        if prev_file_suffix is not None:
-            warnings.warn(f"prev_file_suffix is not None, it's: {prev_file_suffix}, however it's not used by the post_process method")
+        # prev_file_suffix determines if will read in previous hyper parameters or just use naive
+
+        # if prev_file_suffix is not None:
+        #     warnings.warn(f"prev_file_suffix is not None, it's: {prev_file_suffix}, however it's not used by the post_process method")
+
+        current_date = date if current_date is None else current_date
 
         # TODO: add option to provide previous result directly to post_process - instead of reading in from file
         assert grid_res is not None, "grid_res needs to be specified"
         assert not isinstance(prev_results_file, dict), "prev_result type: dict not yet implemented"
-
         assert isinstance(prev_results_file, (str, type(None)))
 
-        if prev_results_file is None:
+        if prev_file_suffix is None:
             if self.verbose:
-                print("in post_process: prev_result is None, will use naive hyper parameters")
+                print("in post_process: prev_file_suffix is None, will use naive hyper parameters")
             hp_date = self.hyper_params_for_date(date=date, prev_res=None,
                                                  dims=self.aux['x'].dims.copy(),
                                                  length_scale_name=self.length_scale_name)
 
-        elif isinstance(prev_results_file, dict):
-            assert False, "prev_result type: dict not yet implemented"
-            # return hp_date
-        elif isinstance(prev_results_file, str):
+        elif isinstance(prev_file_suffix, str):
 
-            assert prev_results_dir is not None
+            assert prev_results_dir is not None, f"prev_results_dir is None, however prev_file_suffix: {prev_file_suffix}, unable to read previous results"
             assert os.path.exists(prev_results_dir), f"prev_results_dir:\n{prev_results_dir}\ndoes not exist"
 
             # read in previous results
             prev_res = self.read_results(results_dir=prev_results_dir,
-                                         file=prev_results_file,
+                                         file=f"results{prev_file_suffix}.csv",
+                                         file_suffix=prev_file_suffix,
                                          grid_res_loc=grid_res,
                                          grid_size=big_grid_size,
                                          unflatten=True,
@@ -1702,6 +1704,16 @@ class SeaIceFreeboard(DataLoader):
                                                                 vmax=vmax_map[k] if isinstance(vmax_map,
                                                                                                dict) else None,
                                                                 std=std)
+        if current_date != date:
+            if self.verbose:
+                print(f"in hyper parameter data current_date = {current_date} != date = {date}"
+                      f"will set 'date' in dims to current_date")
+            # make sure the date in dims align to current date
+            # - as previous results can use a different (i.e. previous) date
+            for k in list(hp_date.keys()):
+                assert len(hp_date[k].dims['date']) == 1, "expect date dimension to be length 1"
+                hp_date[k].dims['date'][:] = current_date
+
         return hp_date
 
     @staticmethod
@@ -1767,7 +1779,8 @@ class SeaIceFreeboard(DataLoader):
             skip_if_pred_exists=False,
             use_raw_data=False,
             tmp_dir=None,
-            predict_locations=None):
+            predict_locations=None,
+            previous_results=None):
         """
         wrapper function to run optimal interpolation of sea ice freeboard for a given date
         """
@@ -1788,6 +1801,8 @@ class SeaIceFreeboard(DataLoader):
         skipped_file = f"skipped{file_suffix}.csv"
         param_file = f"params{file_suffix}"
 
+        # default dict if provided as None
+
         if post_process is None:
             post_process = {}
 
@@ -1797,6 +1812,17 @@ class SeaIceFreeboard(DataLoader):
         if optimise_params is None:
             optimise_params = {}
 
+        if previous_results is None:
+            previous_results = {}
+
+        # ---
+        # check if previous results are correspond to the current results
+        # ---
+
+        assert not ( (previous_results.get('dir', '') == output_dir) & (previous_results.get('suffix', '') == file_suffix)), \
+                     f"preivous_results\n{previous_results}\nhas the same dir and suffix values as output_dir and file_suffix, they should be different"
+
+        # HACK: the following is ill thought out
         # TODO: perhaps remobe min_obs_for_svgp from inducing_point_params entirely
         # TODO: refactor getting min_obs_for_svgp from inducing_point_params - review how it's used down stream
         min_obs_for_svgp = inducing_point_params.get("min_obs_for_svgp", 1000)
@@ -1945,6 +1971,9 @@ class SeaIceFreeboard(DataLoader):
         # TODO: allow for appending to existing data
         #  - allow to read in existing data then check if grid_loc already exists
 
+        # TODO: clean up this section for loading current results (if job is continuing)
+        #  - simplify criteria or
+
         prior_rdf = pd.DataFrame(columns=["grid_loc_0", "grid_loc_1"])
         if overwrite:
             param_files = [param_file + _ for _ in ['.bak', '.dir', '.dat', '.pkl', '.db']]
@@ -1958,7 +1987,7 @@ class SeaIceFreeboard(DataLoader):
 
         else:
             try:
-                # TODO: allow this
+                # TODO: tidy / restructure optimise / skip_if_pred_exists - which should be results exist
                 if optimise:
                     prior_rdf = pd.read_csv(os.path.join(date_dir, result_file))
                     prior_rdf = prior_rdf[["grid_loc_0", "grid_loc_1"]]
@@ -1984,14 +2013,22 @@ class SeaIceFreeboard(DataLoader):
         # hyper parameters for date (optionally post-processed if read from else where)
         # -------
 
-        post_process["prev_results_dir"] = post_process.get("prev_results_dir", output_dir)
-        post_process["prev_results_file"] = post_process.get("prev_results_file", None)
+        # raise warning if using legacy input
+        for prtmp in ['prev_results_file', 'prev_results_dir']:
+            if prtmp in post_process:
+                warnings.warn(f"'{prtmp}' found in post_process dict, it will NOT be used, removing now"
+                              " use prev_results dict instead (for 'dir' and 'suffix'")
+                post_process.pop(prtmp)
 
-        hp_date = self.post_process(date=date,
+        hp_date = self.post_process(date=previous_results.get("date", date),
+                                    current_date=date,
                                     grid_res=grid_res,
-                                    # std=50 / grid_res,
                                     std=coarse_grid_spacing,
+                                    prev_file_suffix=previous_results.get("suffix", None),
+                                    prev_results_dir=previous_results.get("dir", None),
                                     **post_process)
+
+
 
         # --
         # select data for given date
@@ -2033,29 +2070,31 @@ class SeaIceFreeboard(DataLoader):
         # store parameters (from GPflow) in dict
         param_dict = {}
 
-        # TODO: review loading of model parameters (for GPflow) - would want to use this when making predictions
+        # TODO: (further) review loading of model parameters (for GPflow) - would want to use this when making predictions
         # TODO: tidy up the reading in of previous model parameters - make this into a method?
         # TODO: storing parameters should be specific to this run
         # if the engine is not PurePython
         if (self.engine != "PurePython") & load_params:
-            # load pre-existing model parameters, if they exist
-            # prev_data_dir = post_process.get('prev_results_dir', None)
-            # params_data_dir =
-            # if prev_data_dir is not None:
-            # prev_data_dir = os.path.join(prev_data_dir, date)
-            # assert os.path.exists(prev_data_dir), f"prev_data_dir:\n{prev_data_dir}\nwas provide but does not exist"
-            # prev_file_suffix = post_process.get("prev_file_suffix", file_suffix)
-            # prev_param_file = os.path.join(prev_data_dir, f"params{prev_file_suffix}")
-            prev_param_file = os.path.join(date_dir, param_file)
-            if self.verbose:
-                print(f"reading previous params from:\n{prev_param_file}")
 
-            with shelve.open(prev_param_file) as sdb:
-                for k in sdb.keys():
-                    # print(k)
-                    if k not in param_dict:
-                        # NOTE: the keys in shelve objects are strings, expect them to be able to be converted to tuples
-                        param_dict[make_tuple(k)] = sdb[k]
+            # load the parameters from a previous results - useful for svgp and making predictions
+            if previous_results.get('dir', None) is None:
+                print(f"load_params={load_params}, but there is no 'dir' value specified in 'previous_results', nothing to load")
+            else:
+
+                prev_param_date_dir = os.path.join(previous_results['dir'], date)
+                assert os.path.exists(prev_param_date_dir), \
+                    f"previous_results['dir']={previous_results['dir']}\ndoes not have subdirectory date={date}, cant load previous params"
+
+                prev_param_file = os.path.join(prev_param_date_dir, param_file)
+                if self.verbose:
+                    print(f"reading previous params from:\n{prev_param_file}")
+
+                with shelve.open(prev_param_file) as sdb:
+                    for k in sdb.keys():
+                        # print(k)
+                        if k not in param_dict:
+                            # NOTE: the keys in shelve objects are strings, expect them to be able to be converted to tuples
+                            param_dict[make_tuple(k)] = sdb[k]
 
                 print(f"loaded parameters for: {len(param_dict)} GP models")
 

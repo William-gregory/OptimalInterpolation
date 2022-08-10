@@ -606,22 +606,6 @@ class DataLoader():
 
         if data_cols is not None:
             print("data_cols provided but it is not used")
-            # if self.verbose:
-            #     print("data_cols not provided, getting default values ")
-            # if re.search("^results", file):
-            #     data_cols = ['x', 'y', 'lon', 'lat',
-            #                  'num_inputs', 'optimise_success',# "run_time",
-            #                  "marginal_loglikelihood",
-            #                  "ls_x", "ls_y", "ls_t",
-            #                  "kernel_variance", "likelihood_variance",
-            #                  ]
-            # # otherwise expect predictions
-            # else:
-            #     # data_cols =['f*', 'f*_var', 'y', 'y_var', 'grid_loc_0', 'grid_loc_1', 'proj_loc_0', 'proj_loc_1',
-            #     #             'mean', 'date', 'xs_x', 'xs_y', 'xs_t', 'run_time']
-            #     data_cols = ['f*', 'f*_var', 'y', 'y_var', 'mean',
-            #                  'xs_x', 'xs_y', 'xs_t', #'run_time'
-            #                  ]
 
         assert os.path.exists(results_dir)
 
