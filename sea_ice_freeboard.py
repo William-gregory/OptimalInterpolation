@@ -2201,7 +2201,7 @@ class SeaIceFreeboard(DataLoader):
                                min_obs_for_svgp=min_obs_for_svgp,
                                **inducing_point_params)
             except Exception as e:
-                print("!" * 100 + f"\nExpection occurred when building model, error message:\n{e}\n" + "!" * 100 )
+                print("!" * 100 + f"\nException occurred when building model, error message:\n{e}\n" + "!" * 100 )
 
                 tmp = pd.DataFrame({"grid_loc_0": grid_loc[0],
                                     "grid_loc_1": grid_loc[1],
@@ -2228,8 +2228,8 @@ class SeaIceFreeboard(DataLoader):
                     # - and this will cause an issue
                     try:
                         multiple_assign(self.model, param_dict[xy_loc])
-                    except KeyError as e:
-                        print("!" * 100 + f"\nExpection occurred when building model, error message:\n{e}\n" + "!" * 100)
+                    except Exception as e:
+                        print("!" * 100 + f"\nException occurred when building model, error message:\n{e}\n" + "!" * 100)
 
                         tmp = pd.DataFrame({"grid_loc_0": grid_loc[0],
                                             "grid_loc_1": grid_loc[1],
