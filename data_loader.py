@@ -662,6 +662,8 @@ class DataLoader():
                 print("reading a 'results' file")
                 try:
                     # results contains attributes / parameters
+                    if self.verbose > 3:
+                        print(f"reading:\n{os.path.join(results_dir, date, file)}")
                     res = pd.read_csv(os.path.join(results_dir, date, file))
 
                     # HACK: x,y (location) values had names change to x_loc, y_loc

@@ -2077,6 +2077,7 @@ class SeaIceFreeboard(DataLoader):
         # if the engine is not PurePython
         if (self.engine != "PurePython") & load_params:
 
+            print("loading previously generate (gpflow) parameters")
             # load the parameters from a previous results - useful for svgp and making predictions
             if previous_results.get('dir', None) is None:
                 print(f"load_params={load_params}, but there is no 'dir' value specified in 'previous_results', nothing to load")
@@ -2213,7 +2214,6 @@ class SeaIceFreeboard(DataLoader):
                 print("skipping")
                 continue
 
-
             # ----
             # load model parameters
             # ----
@@ -2226,7 +2226,21 @@ class SeaIceFreeboard(DataLoader):
                     # NOTE: if min_obs_for_svgp is different from last time it was run
                     # - this could lead to self.model being a different type
                     # - and this will cause an issue
-                    multiple_assign(self.model, param_dict[xy_loc])
+                    try:
+                        multiple_assign(self.model, param_dict[xy_loc])
+                    except KeyError as e:
+                        print("!" * 100 + f"\nExpection occurred when building model, error message:\n{e}\n" + "!" * 100)
+
+                        tmp = pd.DataFrame({"grid_loc_0": grid_loc[0],
+                                            "grid_loc_1": grid_loc[1],
+                                            "reason": str(e)},
+                                           index=[i])
+
+                        tmp.to_csv(skip_file, mode='a',
+                                   header=not os.path.exists(skip_file),
+                                   index=False)
+                        print("skipping")
+                        continue
 
             # ---
             # get the hyper parameters
