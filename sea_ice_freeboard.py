@@ -1800,7 +1800,7 @@ class SeaIceFreeboard(DataLoader):
         prediction_file = f"prediction{file_suffix}.csv"
         config_file = f"input_config{file_suffix}.json"
         skipped_file = f"skipped{file_suffix}.csv"
-        param_file = f"params{previous_results['suffix']}"
+        param_file = f"params{file_suffix}"
 
         # default dict if provided as None
 
@@ -2093,6 +2093,8 @@ class SeaIceFreeboard(DataLoader):
                 if self.verbose:
                     print(f"reading previous params from:\n{prev_param_file}")
 
+                # NOTE: on colab shelve will use dbm.ndbm
+                # - on minconda/anaconda (on linux) will use dbm.dump and can't open dbm.ndbm
                 with shelve.open(prev_param_file) as sdb:
                     for k in sdb.keys():
                         # print(k)
@@ -2431,8 +2433,7 @@ class SeaIceFreeboard(DataLoader):
                              file_suffix="",
                              big_grid_size=360,
                              results_data_cols=None,
-                             preds_data_cols=None
-                             ):
+                             preds_data_cols=None):
         """a wrapper for read_results, getting both data from results_file and predictions
         outputs combined with input_config"""
         # TODO: remove commented sections of code below, and un used inputs
