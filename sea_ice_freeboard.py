@@ -1524,6 +1524,9 @@ class SeaIceFreeboard(DataLoader):
         # default will be to calculate GPs for all points
         select_bool = np.ones(sie.shape[:2], dtype=bool)
 
+        # TODO: here allow for grid_locations (2-d array) to be used
+        #  - turn all to False except those in grid_locations
+
         assert date in sie_dates, f"date: {date} is not in sie['dims']['date']"
         # dloc = np.where(np.in1d(sie_dates, date))[0][0]
         dloc = match(date, sie_dates)[0]
@@ -2104,6 +2107,11 @@ class SeaIceFreeboard(DataLoader):
 
                 print(f"loaded parameters for: {len(param_dict)} GP models")
 
+        # due to (possible) change in output files - i.e. more columns
+        # check before appending to them, if they're different then over write full file
+        # and then append as before. use this bool flag to keep track
+        checked_output_columns = False
+
         for i in range(num_loc):
 
             if (i % print_every) == 0:
@@ -2395,7 +2403,39 @@ class SeaIceFreeboard(DataLoader):
 
             pdf = pd.DataFrame(preds)
 
+            # TODO: wrap the below into a method?
             if append_to_file:
+
+                if not checked_output_columns:
+
+                    for df_file in [(rdf, res_file), (pdf, pred_file)]:
+
+                        try:
+                            # get columns of data on file - if it exists
+                            df_cols = df_file[0].columns
+                            # read in tops of columns
+                            df_tmp = pd.read_csv(df_file[1], nrows=5)
+
+                            # get common column names
+                            ccol = np.intersect1d(df_tmp.columns, df_cols)
+
+                            # if don't have same set of columns
+                            if (len(ccol) != len(df_cols)) | (len(ccol) != len(df_tmp.columns)):
+                                if self.verbose:
+                                    print(f"OVERWRITING:\n{df_file[0]}\nin order to add more columns")
+                                # TODO: need to be careful with adding names,
+                                #  as will end up appending so columns need to be added with out look at file top
+                                df_tmp = pd.read_csv(os.path.exists(df_file[1]))
+                                # concat empty dataframe of common columns
+                                df_tmp = pd.concat([pd.DataFrame(columns=df_cols), df_tmp])
+                                # overwrite file
+                                df_tmp.to_csv(df_file[1], index=False)
+
+                        except FileNotFoundError as e:
+                            if self.verbose > 3:
+                                print(f"FileNotFoundError\n{e}")
+                    checked_output_columns = True
+
                 # append results to file
                 rdf.to_csv(res_file, mode="a", header=not os.path.exists(res_file),
                            index=False)
