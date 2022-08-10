@@ -2422,10 +2422,10 @@ class SeaIceFreeboard(DataLoader):
                             # if don't have same set of columns
                             if (len(ccol) != len(df_cols)) | (len(ccol) != len(df_tmp.columns)):
                                 if self.verbose:
-                                    print(f"OVERWRITING:\n{df_file[0]}\nin order to add more columns")
+                                    print(f"OVERWRITING:\n{df_file[1]}\nin order to add more columns")
                                 # TODO: need to be careful with adding names,
                                 #  as will end up appending so columns need to be added with out look at file top
-                                df_tmp = pd.read_csv(os.path.exists(df_file[1]))
+                                df_tmp = pd.read_csv(df_file[1])
                                 # concat empty dataframe of common columns
                                 df_tmp = pd.concat([pd.DataFrame(columns=df_cols), df_tmp])
                                 # overwrite file
