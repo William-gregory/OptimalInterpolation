@@ -325,7 +325,7 @@ class SeaIceFreeboard(DataLoader):
         if self.obs_date.vals.shape[:2] == self.mean.vals.shape[:2]:
             self.obs_date.vals -= self.mean.vals[..., None, None]
         else:
-            warnings.warn("mean shape did not align with obs_date, will subtract nan mean")
+            warnings.warn("mean shape did not align with obs_date, will subtract nanmean from self.mean.vals")
             self.obs_date.vals -= np.nanmean(self.mean.vals)
         self.obs_date['de-mean'] = True
 
@@ -1184,61 +1184,192 @@ class SeaIceFreeboard(DataLoader):
 
 
 
-    def get_neighbours_of_grid_loc(self, grid_loc,
-                                   coarse_grid_spacing=1,
-                                   flatten=True):
+    def get_neighbours_of_grid_loc(self,
+                                   grid_loc,
+                                   predict_locations=None,
+                                   use_raw_data=False,
+                                   coarse_grid_spacing=1):
         """get x,y location about some grid location"""
 
-        # if not using_raw data select values
-        if not self.obs_date['raw_data']:
-            gl0 = grid_loc[0] + np.arange(-coarse_grid_spacing, coarse_grid_spacing + 1)
-            gl1 = grid_loc[1] + np.arange(-coarse_grid_spacing, coarse_grid_spacing + 1)
+        # prediction locations
+        # "center_only"
+        # "neighbouring_grid_centers"
+        # "obs_in_cell"
+        # {"name": "evenly_spaced_in_grid_cell": "n": 100}
 
-            # trim to be in grid range
-            gl0 = gl0[(gl0 >= 0) & (gl0 < self.aux['y'].vals.shape[1])]
-            gl1 = gl1[(gl1 >= 0) & (gl1 < self.aux['x'].vals.shape[1])]
+        if predict_locations is None:
+            print("predict_locations is None, will default to 'center_only'")
+            predict_locations = 'center_only'
 
-            gl0, gl1 = np.meshgrid(gl0, gl1)
+        # if prediction_locations is not a list convert it to and increment over
+        if not isinstance(predict_locations, list):
+            predict_locations = [predict_locations]
 
-            # location to predict on
-            x_pred = self.aux['x'].vals[gl0, gl1]
-            y_pred = self.aux['y'].vals[gl0, gl1]
-            t_pred = np.zeros(x_pred.shape)
+        # TODO: concatenate all the prediction arrays
+        xlist, ylist, tlist, g0list, g1list, namelist = [], [], [], [], [], []
+        for pred_loc in predict_locations:
+            if self.verbose > 3:
+                print(f"pred_loc: {pred_loc}")
 
-        else:
-            # get the x,y valyes
-            x, y = self.aux['x'].vals[grid_loc], self.aux['y'].vals[grid_loc]
+            add_to_list = True
 
-            gr = self.grid_res
-            # if grid_res is a string - i.e. expect 50km
-            if isinstance(gr, str):
-                gr = int(re.sub("\D", "", gr))
-            # half of the interval - assuming x,y is at center of square
-            half_ival = (gr * 1000) / 2
+            # center location only
+            if pred_loc == "center_only":
+                x_pred, y_pred, t_pred, gl0, gl1 = self._predict_loc_center(grid_loc, use_raw_data)
+                pname = np.full(x_pred.shape, pred_loc)
+            # observations in cell - from held_out data
+            elif pred_loc == "obs_in_cell":
+                # NOTE: if not using held out data this won't work, and if it's the only
+                # pred_loc in prediction_locations then it will crash
+                x_pred, y_pred, t_pred, gl0, gl1 = self._predict_loc_obs_in_cell(grid_loc)
+                pname = np.full(x_pred.shape, pred_loc)
+                if np.isnan(x_pred).any():
+                    add_to_list = False
+            # center of neighbouring cells - will include center
+            elif pred_loc == "neighbour_cell_centers":
+                x_pred, y_pred, t_pred, gl0, gl1 = self._predict_loc_neighbour_center(grid_loc, coarse_grid_spacing)
+                pname = np.full(x_pred.shape, pred_loc)
+            # predict at even locations within a cell
+            elif isinstance(pred_loc, dict):
+                if pred_loc['name'] == "evenly_spaced_in_cell":
+                    pred_n = int(pred_loc.get("n", 100))
+                    x_pred, y_pred, t_pred, gl0, gl1 = self._predict_loc_evenly_spaced_in_cell(grid_loc, n=pred_n)
+                    pname = np.full(x_pred.shape, f"evenly_spaced_in_cell{pred_n}")
+                else:
+                    print(f"pred_loc was dict: {pred_loc} BUT 'name': {pred_loc['name']} NOT UNDERSTOOD, SKIPPING!")
+                    warnings.warn(f"pred_loc was dict: {pred_loc} BUT 'name': {pred_loc['name']} NOT UNDERSTOOD, SKIPPING!")
+                    add_to_list = False
 
-            hdims = self.obs_date['held_out'].dims
-            b = (hdims['x'] >= (x - half_ival)) & \
-                (hdims['x'] < (x + half_ival)) & \
-                (hdims['y'] >= (y - half_ival)) & \
-                (hdims['y'] < (y + half_ival))
+            else:
+                print(f"pred_loc: {pred_loc} NOT UNDERSTOOD, SKIPPING!")
+                warnings.warn(f"pred_loc: {pred_loc} NOT UNDERSTOOD, SKIPPING!")
+                add_to_list = False
 
-            x_pred = hdims['x'][b]
-            y_pred = hdims['y'][b]
-            t_pred = hdims['t'][b]
+            # if there was no issue with getting prediction locations
+            if add_to_list:
+                # NOTE: appending like this is not very pythonic
+                xlist.append(x_pred)
+                ylist.append(y_pred)
+                tlist.append(t_pred)
+                g0list.append(gl0)
+                g1list.append(gl1)
+                namelist.append(pname)
 
-            # add prediction at center
-            x_pred = np.concatenate([x_pred, np.array([x])])
-            y_pred = np.concatenate([y_pred, np.array([y])])
-            t_pred = np.concatenate([t_pred, np.array([0])])
 
-            gl0, gl1 = np.full(x_pred.shape, np.nan), np.full(x_pred.shape, np.nan)
+        # out = [x_pred, y_pred, t_pred, gl0, gl1]
+        #
+        # if flatten:
+        #     return [_.flatten() for _ in out]
+        # else:
+        #     return out
 
-        out = [x_pred, y_pred, t_pred, gl0, gl1]
+        out = [np.concatenate(_) for _ in [xlist, ylist, tlist, g0list, g1list, namelist]]
+        return out
 
-        if flatten:
-            return [_.flatten() for _ in out]
-        else:
-            return out
+    def _predict_loc_center(self, grid_loc, use_raw_data):
+
+        x, y = self.aux['x'].vals[grid_loc], self.aux['y'].vals[grid_loc]
+        # NOTE: t for raw data has been offset by 0.5 already
+        # if using raw data - predictions should be in the middle of day
+        # if use_raw_data:
+        #     t = 0.5
+        # else:
+        #     t = 0
+
+        return np.array([x]), np.array([y]), np.array([0]), np.array([grid_loc[0]]), np.array([grid_loc[1]])
+
+    def _predict_loc_neighbour_center(self, grid_loc, coarse_grid_spacing):
+        # predict within some coarse_grid_spacing of the center grid cell
+        gl0 = grid_loc[0] + np.arange(-coarse_grid_spacing, coarse_grid_spacing + 1)
+        gl1 = grid_loc[1] + np.arange(-coarse_grid_spacing, coarse_grid_spacing + 1)
+
+        # trim to be in grid range
+        gl0 = gl0[(gl0 >= 0) & (gl0 < self.aux['y'].vals.shape[1])]
+        gl1 = gl1[(gl1 >= 0) & (gl1 < self.aux['x'].vals.shape[1])]
+
+        gl0, gl1 = np.meshgrid(gl0, gl1)
+
+        # location to predict on
+        x_pred = self.aux['x'].vals[gl0, gl1]
+        y_pred = self.aux['y'].vals[gl0, gl1]
+        t_pred = np.zeros(x_pred.shape)
+
+        return x_pred.flatten(), y_pred.flatten(), t_pred.flatten(), gl0.flatten(), gl1.flatten()
+
+    def _predict_loc_obs_in_cell(self, grid_loc):
+        # this is useful for when using raw data
+        # get the x,y valyes
+        x, y = self.aux['x'].vals[grid_loc], self.aux['y'].vals[grid_loc]
+
+        gr = self.grid_res
+        # if grid_res is a string - i.e. expect 50km
+        if isinstance(gr, str):
+            gr = int(re.sub("\D", "", gr))
+        # half of the interval - assuming x,y is at center of square
+        half_ival = (gr * 1000) / 2
+
+        if 'held_out' not in self.obs_date:
+            warnings.warn(f"predicting using 'obs_in_cell' only works with 'held_out' data and with use_raw_data=True")
+            print(f"predicting using 'obs_in_cell' only works with 'held_out' data with use_raw_data=True, returning None")
+            return [np.array([np.nan])] * 5
+
+        hdims = self.obs_date['held_out'].dims
+        # create bool array for selecting observations from the held_out locations
+        b = (hdims['x'] >= (x - half_ival)) & \
+            (hdims['x'] < (x + half_ival)) & \
+            (hdims['y'] >= (y - half_ival)) & \
+            (hdims['y'] < (y + half_ival))
+
+        x_pred = hdims['x'][b]
+        y_pred = hdims['y'][b]
+        t_pred = hdims['t'][b]
+
+        # add prediction at center
+        # NOTE: predicting at t=0 because it's assumed t array shifted by -0.5
+        # making t=0 noon. check t_pred values from above for reference
+        # x_pred = np.concatenate([x_pred, np.array([x])])
+        # y_pred = np.concatenate([y_pred, np.array([y])])
+        # t_pred = np.concatenate([t_pred, np.array([0])])
+
+        gl0, gl1 = np.full(x_pred.shape, np.nan), np.full(x_pred.shape, np.nan)
+
+        return x_pred, y_pred, t_pred, gl0, gl1
+
+    def _predict_loc_evenly_spaced_in_cell(self, grid_loc, n=100):
+        # predict on an evenly spaced grid WITHIN a cell (not on boarder).
+        # n is the total number of points
+        # will use the square root of n to determine spacing within grid
+        # TODO: should just let n be the number of points along side? with total points being n^2?
+
+        # get the x,y valyes
+        x, y = self.aux['x'].vals[grid_loc], self.aux['y'].vals[grid_loc]
+
+        gr = self.grid_res
+        # if grid_res is a string - i.e. expect 50km
+        if isinstance(gr, str):
+            gr = int(re.sub("\D", "", gr))
+        # half of the interval - assuming x,y is at center of square
+        half_ival = (gr * 1000) / 2
+
+        n_side = int(np.floor(np.sqrt(n)))
+
+        # want to the points to lie within the grid
+        # - make evenly spaced values from 0 to grid width, then subtract half width to center
+        _ = np.linspace(0, gr * 1000, n_side + 2) - half_ival
+        # drop the points on the end, on the boundary
+        _ = _[1:-1]
+        x_pred, y_pred = np.meshgrid(_, _)
+        t_pred = np.zeros(x_pred.shape)
+
+        # add the x,y locations to have x_pred, y_pred now centered about x,y
+        x_pred += x
+        y_pred += y
+
+        # grid locations - legacy requirement
+        gl0, gl1 = np.full(x_pred.shape, np.nan), np.full(x_pred.shape, np.nan)
+
+        return x_pred.flatten(), y_pred.flatten(), t_pred.flatten(), gl0.flatten(), gl1.flatten()
+
 
     def predict_freeboard(self, x=None, y=None, t=None, lon=None, lat=None):
         """predict freeboard at (x,y,t) or (lon,lat,t) location
@@ -1635,7 +1766,8 @@ class SeaIceFreeboard(DataLoader):
             optimise_params=None,
             skip_if_pred_exists=False,
             use_raw_data=False,
-            tmp_dir = None):
+            tmp_dir=None,
+            predict_locations=None):
         """
         wrapper function to run optimal interpolation of sea ice freeboard for a given date
         """
@@ -1645,6 +1777,7 @@ class SeaIceFreeboard(DataLoader):
 
         # TODO: move min_obs_for_svgp into inducing_point_params
         # TODO: allow reading from previous results - for intialisation
+        # TODO: review / reconsider if t should be offset by -0.5 for raw data, making t=0 -> noon
 
         # res = sifb.read_results(results_dir, file="results.csv", grid_res_loc=grid_res, grid_size=big_grid_size,
         #                         unflatten=True)
@@ -1664,6 +1797,7 @@ class SeaIceFreeboard(DataLoader):
         if optimise_params is None:
             optimise_params = {}
 
+        # TODO: perhaps remobe min_obs_for_svgp from inducing_point_params entirely
         # TODO: refactor getting min_obs_for_svgp from inducing_point_params - review how it's used down stream
         min_obs_for_svgp = inducing_point_params.get("min_obs_for_svgp", 1000)
         print(f"min_obs_for_svgp: {min_obs_for_svgp }")
@@ -1813,7 +1947,7 @@ class SeaIceFreeboard(DataLoader):
 
         prior_rdf = pd.DataFrame(columns=["grid_loc_0", "grid_loc_1"])
         if overwrite:
-            param_files = [param_file + _ for _ in ['.bak', '.dir', '.dat', '.pkl']]
+            param_files = [param_file + _ for _ in ['.bak', '.dir', '.dat', '.pkl', '.db']]
             move_to_archive(top_dir=date_dir,
                             file_names=[config_file,
                                         result_file,
@@ -2085,13 +2219,16 @@ class SeaIceFreeboard(DataLoader):
 
             # mll = self.get_marginal_log_likelihood()
 
-            # ---
+            # ---------------
             # make predictions
-            # ---
+            # ---------------
 
-            # TODO: predict in region around center point
-            x_pred, y_pred, t_pred, gl0, gl1 = self.get_neighbours_of_grid_loc(grid_loc,
-                                                                       coarse_grid_spacing=coarse_grid_spacing)
+            # prediction locations
+            x_pred, y_pred, t_pred, gl0, gl1, plocname = \
+                self.get_neighbours_of_grid_loc(grid_loc,
+                                                predict_locations=predict_locations,
+                                                use_raw_data=use_raw_data,
+                                                coarse_grid_spacing=coarse_grid_spacing)
 
             preds = self.predict_freeboard(x=x_pred,
                                            y=y_pred,
@@ -2116,6 +2253,7 @@ class SeaIceFreeboard(DataLoader):
             preds['grid_loc_1'] = grid_loc[1]
             preds["proj_loc_0"] = gl0
             preds["proj_loc_1"] = gl1
+            preds["plocname"] = plocname
             # TODO: this needs to be more robust to handle different mean priors
             # - using the mean of the single GP just calculated
             preds['fyi_mean'] = self.mean.vals[grid_loc[0], grid_loc[1]]
@@ -2146,8 +2284,18 @@ class SeaIceFreeboard(DataLoader):
                               (xs[:, 1] == (y_ * self.scale_inputs[1])) & \
                               (xs[:, 2] == (0 * self.scale_inputs[2]))
 
-            center_pred = {_: preds[_][center_loc_bool] if isinstance(preds[_], np.ndarray) else np.array([preds[_]])
+            # Should always predict on the center... but sometimes don't...
+            center_pred = {_: preds[_][center_loc_bool]
+                            if isinstance(preds[_], np.ndarray) else np.array([preds[_]])
                            for _ in ["f*", "f*_var", "y_var", "mean", "fyi_mean"]}
+            # HACK: remove keys where there are no values - i.e. prediction at cell center not made
+            # TODO: decided if should remove (pop) keys or just return nan
+            # - returning nan will give a more consistent output
+            for k in list(center_pred.keys()):
+                if len(center_pred[k]) == 0:
+                    # center_pred.pop(k)
+                    center_pred[k] = np.array([np.nan])
+
             # center_pred['mean'] = preds['mean']
             # center_pred['fyi_mean'] = preds['fyi_mean']
 
