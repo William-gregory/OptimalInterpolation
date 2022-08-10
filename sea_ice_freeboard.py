@@ -1800,7 +1800,7 @@ class SeaIceFreeboard(DataLoader):
         prediction_file = f"prediction{file_suffix}.csv"
         config_file = f"input_config{file_suffix}.json"
         skipped_file = f"skipped{file_suffix}.csv"
-        param_file = f"params{file_suffix}"
+        param_file = f"params{previous_results['suffix']}"
 
         # default dict if provided as None
 
@@ -2086,7 +2086,9 @@ class SeaIceFreeboard(DataLoader):
                 assert os.path.exists(prev_param_date_dir), \
                     f"previous_results['dir']={previous_results['dir']}\ndoes not have subdirectory date={date}, cant load previous params"
 
-                prev_param_file = os.path.join(prev_param_date_dir, param_file)
+                assert previous_results['suffix'] is not None, "in previous_results: 'suffix' is None, can't load previous parameters (with load_params=True)"
+
+                prev_param_file = os.path.join(prev_param_date_dir,  f"params{previous_results['suffix']}")
                 if self.verbose:
                     print(f"reading previous params from:\n{prev_param_file}")
 
