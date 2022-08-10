@@ -1780,7 +1780,8 @@ class SeaIceFreeboard(DataLoader):
             use_raw_data=False,
             tmp_dir=None,
             predict_locations=None,
-            previous_results=None):
+            previous_results=None,
+            store_params=True):
         """
         wrapper function to run optimal interpolation of sea ice freeboard for a given date
         """
@@ -2278,7 +2279,7 @@ class SeaIceFreeboard(DataLoader):
             # ----
 
             # TODO: allow for parameter extraction from PurePython, similar to GPflow (low priority)
-            if self.engine != "PurePython":
+            if (self.engine != "PurePython") & (store_params):
                 with shelve.open(os.path.join(date_dir, param_file), writeback=True) as sdb:
                     sdb[repr(xy_loc)] = parameter_dict(self.model)
 
