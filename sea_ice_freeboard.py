@@ -462,6 +462,7 @@ class SeaIceFreeboard(DataLoader):
                                    prior_mean_method="fyi_average",
                                    min_sie=None,
                                    use_raw_data=False):
+
         # TODO: allow to be explict of which data to use - raw or not
         # select data for a given date (include some days ahead / behind)
         self.select_obs_date(date,
@@ -1505,7 +1506,8 @@ class SeaIceFreeboard(DataLoader):
                             min_sie=0.15,
                             coarse_grid_spacing=1,
                             grid_space_offset=0,
-                            sat_names=None):
+                            sat_names=None,
+                            calc_on_grid_loc=None):
         """
         get a bool array of the locations to calculate GP
         - only where sie exists (not nan)
@@ -1523,6 +1525,34 @@ class SeaIceFreeboard(DataLoader):
 
         # default will be to calculate GPs for all points
         select_bool = np.ones(sie.shape[:2], dtype=bool)
+
+        # if calc on grid is provide, will aim to only calculate on those locations
+        if calc_on_grid_loc is not None:
+
+            calc_on_grid_loc = np.array(calc_on_grid_loc) if isinstance(calc_on_grid_loc, list) else calc_on_grid_loc
+
+            assert isinstance(calc_on_grid_loc,
+                              np.ndarray), f"calc_on_grid_loc expected to be ndarray, got: {type(calc_on_grid_loc)}"
+            assert len(
+                calc_on_grid_loc.shape) == 2, f"calc_on_grid_loc len(shape) expected to be 2, got {len(calc_on_grid_loc.shape)}"
+            assert calc_on_grid_loc.shape[
+                       1] == 2, f"expect the second dimension to be size 2, got: {calc_on_grid_loc.shape[1]}"
+            calc_on_grid_loc = calc_on_grid_loc.astype(int)
+
+            if self.verbose:
+                print("calc_on_grid_loc was provided, will aim to calculate only on those location")
+                print(f"there were {len(calc_on_grid_loc)} locations provided")
+            # check values are in range
+            for i in [0, 1]:
+                assert np.all((calc_on_grid_loc[:, i]) >= 0)
+                assert np.all((calc_on_grid_loc[:, i]) < select_bool.shape[i])
+
+            # make all select_bool values False
+            select_bool[...] =  False
+            # except for the calc_on_grid_loc points
+            for i in range(len(calc_on_grid_loc)):
+                gl = calc_on_grid_loc[i,:]
+                select_bool[gl[0], gl[1]] = True
 
         # TODO: here allow for grid_locations (2-d array) to be used
         #  - turn all to False except those in grid_locations
@@ -1784,13 +1814,27 @@ class SeaIceFreeboard(DataLoader):
             tmp_dir=None,
             predict_locations=None,
             previous_results=None,
-            store_params=True):
+            store_params=True,
+            calc_on_grid_loc=None):
         """
         wrapper function to run optimal interpolation of sea ice freeboard for a given date
         """
 
         if use_raw_data:
             assert self.raw_obs is not None, f"use_raw_data={use_raw_data}, but attribute: raw_obs={self.raw_obs}"
+
+        # check calc_on_grid_loc
+        if calc_on_grid_loc is not None:
+            # NOTE: this is duplicated again in select_gp_locations
+            calc_on_grid_loc = np.array(calc_on_grid_loc) if isinstance(calc_on_grid_loc, list) else calc_on_grid_loc
+            assert isinstance(calc_on_grid_loc,
+                              np.ndarray), f"calc_on_grid_loc expected to be ndarray, got: {type(calc_on_grid_loc)}"
+            assert len(
+                calc_on_grid_loc.shape) == 2, f"calc_on_grid_loc len(shape) expected to be 2, got {len(calc_on_grid_loc.shape)}"
+            assert calc_on_grid_loc.shape[
+                       1] == 2, f"expect the second dimension to be size 2, got: {calc_on_grid_loc.shape[1]}"
+            calc_on_grid_loc = calc_on_grid_loc.astype(int)
+
 
         # TODO: move min_obs_for_svgp into inducing_point_params
         # TODO: allow reading from previous results - for intialisation
@@ -1845,7 +1889,10 @@ class SeaIceFreeboard(DataLoader):
         locs = locals()
         for k in range(self.run.__code__.co_argcount):
             var = self.run.__code__.co_varnames[k]
-            config[var] = locs[var]
+            if isinstance(locs[var], np.ndarray):
+                config[var] = locs[var].tolist()
+            else:
+                config[var] = locs[var]
         # config['kwargs'] = locs['kwargs']
 
         # ---
@@ -2054,7 +2101,8 @@ class SeaIceFreeboard(DataLoader):
         gp_locs = self.select_gp_locations(date=date,
                                            min_sie=min_sie,
                                            coarse_grid_spacing=coarse_grid_spacing,
-                                           sat_names=hold_out if pred_on_hold_out else None)
+                                           sat_names=hold_out if pred_on_hold_out else None,
+                                           calc_on_grid_loc=calc_on_grid_loc)
         select_loc = np.where(gp_locs)
 
         # ---
@@ -2116,7 +2164,7 @@ class SeaIceFreeboard(DataLoader):
 
             if (i % print_every) == 0:
                 print("*" * 75)
-                print(f"{i + 1}/{num_loc + 1}")
+                print(f"{i + 1}/{num_loc}")
 
             t0 = time.time()
             # ---
