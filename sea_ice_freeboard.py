@@ -1893,6 +1893,7 @@ class SeaIceFreeboard(DataLoader):
                 config[var] = locs[var].tolist()
             else:
                 config[var] = locs[var]
+
         # config['kwargs'] = locs['kwargs']
 
         # ---
@@ -1979,8 +1980,16 @@ class SeaIceFreeboard(DataLoader):
         # ---
 
         config.pop('self')
+        if self.verbose > 1:
+            print("-" * 10)
+            print(f"writing input_config to file:\n{os.path.join(output_dir, config_file)}")
+            print("config:")
+            print(json.dumps(config, indent=4))
+            print("-" * 10)
+
         with open(os.path.join(output_dir, config_file), "w") as f:
             json.dump(config, f, indent=4)
+
 
         # record time to run
         t_total0 = time.time()
