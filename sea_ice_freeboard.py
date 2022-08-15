@@ -962,6 +962,7 @@ class SeaIceFreeboard(DataLoader):
             out = {
                 "optimise_success": opt_logs['success'],
                 "marginal_loglikelihood": mll,
+                "elbo": opt_logs['elbo'],
                 **hyp_params
             }
 
@@ -1112,6 +1113,7 @@ class SeaIceFreeboard(DataLoader):
         adam_opt = tf.optimizers.Adam(learning_rate)
 
         # each optimisation step will update variational and then model (GP?) parameters
+        # - is this slow to define each function call, have as actual method?
         @tf.function
         def optimisation_step():
             natgrad_opt.minimize(loss_fn, variational_vars)
@@ -1132,6 +1134,7 @@ class SeaIceFreeboard(DataLoader):
 
         logf = []
 
+        max_count = 0
         for step in range(maxiter):
             optimisation_step()
             if step % log_freq == 0:
@@ -1155,6 +1158,7 @@ class SeaIceFreeboard(DataLoader):
                     if (max_count >= persistence) & (early_stop):
                         print("objective did not improve stopping")
                         stopped_early = True
+                        logf.append(elbo)
                         break
 
                 logf.append(elbo)
@@ -1815,13 +1819,18 @@ class SeaIceFreeboard(DataLoader):
             predict_locations=None,
             previous_results=None,
             store_params=True,
-            calc_on_grid_loc=None):
+            calc_on_grid_loc=None,
+            store_loss=False):
         """
         wrapper function to run optimal interpolation of sea ice freeboard for a given date
         """
 
         if use_raw_data:
             assert self.raw_obs is not None, f"use_raw_data={use_raw_data}, but attribute: raw_obs={self.raw_obs}"
+
+        if store_loss:
+            assert engine == "GPflow_svgp", f"store_loss={store_loss} but engine is: {engine}, " \
+                                            f"currently only works for 'GPflow_svgp'"
 
         # check calc_on_grid_loc
         if calc_on_grid_loc is not None:
@@ -1848,6 +1857,7 @@ class SeaIceFreeboard(DataLoader):
         config_file = f"input_config{file_suffix}.json"
         skipped_file = f"skipped{file_suffix}.csv"
         param_file = f"params{file_suffix}"
+        loss_file = f"loss{file_suffix}.csv"
 
         # default dict if provided as None
 
@@ -2362,9 +2372,38 @@ class SeaIceFreeboard(DataLoader):
             # ----
 
             # TODO: allow for parameter extraction from PurePython, similar to GPflow (low priority)
-            if (self.engine != "PurePython") & (store_params):
+            if (self.engine != "PurePython") & store_params:
                 with shelve.open(os.path.join(date_dir, param_file), writeback=True) as sdb:
                     sdb[repr(xy_loc)] = parameter_dict(self.model)
+
+            # if using svgp
+            if (self.engine == "GPflow_svgp") & store_loss:
+                # try:
+                #     elbo = opt_hyp.pop("elbo")
+                #     with shelve.open(os.path.join(date_dir, loss_file), writeback=True) as sdb:
+                #         sdb[repr(xy_loc)] = elbo
+                # except KeyError:
+                #     if self.verbose > 1:
+                #         print(f"'elbo' not in optimisation values, engine: {engine}")
+
+                try:
+                    elbo = opt_hyp.pop("elbo")
+                    # with shelve.open(os.path.join(date_dir, loss_file), writeback=True) as sdb:
+                    #     sdb[repr(xy_loc)] = elbo
+                    # store in dataframe -> csv
+                    # "x": x_, "y_": y_,
+
+                    ed = {"grid_loc_0": grid_loc[0], "grid_loc_1": grid_loc[1], 'elbo': elbo}
+                    ed['step'] = optimise_params['log_freq'] * np.arange(len(elbo))
+                    # include mll on full batch, so can compare final values (elbo could be just for mini-batch)
+                    ed['mll'] = opt_hyp["marginal_loglikelihood"]
+                    edf = pd.DataFrame(ed)
+                    los_file = os.path.join(date_dir, loss_file)
+                    edf.to_csv(los_file, mode="a", header=not os.path.exists(los_file),
+                               index=False)
+                except KeyError:
+                    if self.verbose > 1:
+                            print(f"'elbo' not in optimisation values, engine: {engine}")
 
             # ----
             # store values in DataFrame
