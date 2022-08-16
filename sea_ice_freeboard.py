@@ -155,6 +155,11 @@ class SeaIceFreeboard(DataLoader):
         self.engine = None
         self.input_params = {"date": "", "days_behind": 0, "days_ahead": 0}
         self.obs_date = None
+        self.num_inducing_points = None
+        self.days_ahead = None
+        self.days_behind = None
+        self.x_center = None
+        self.y_center = None
 
 
         # random number generator - used for selecting inducing points
@@ -783,6 +788,8 @@ class SeaIceFreeboard(DataLoader):
                            mean_function=None,
                            inducing_variable=None,
                            num_inducing_points=None,
+                           inducing_locations="random",
+                           keep_within=None,
                            **kwargs):
 
         # get the kernel and mean function
@@ -805,12 +812,82 @@ class SeaIceFreeboard(DataLoader):
             if self.verbose > 1:
                 print("no inducing_variable provided, will pick ")
             assert num_inducing_points is not None, f"num_inducing_points must be specified if inducing_variable is not"
-            if num_inducing_points > len(x):
-                print(f"num_inducing_points={num_inducing_points} is greater than\nlen(x)={len(x)}\nwill change to num_inducing_points")
-                num_inducing_points = len(x)
 
-            M_loc = self.rnd.choice(np.arange(len(x)), num_inducing_points, replace=False)
-            Z = x[M_loc, :]
+
+            assert inducing_locations in ["random", "grid"], f"inducing_locations not understood, " \
+                                                             f"got: {inducing_locations}, needs to be in " \
+                                                             f"['random', 'grid']"
+            # select inducing point locations randomly from data
+            if inducing_locations == "random":
+                if num_inducing_points > len(x):
+                    print(
+                        f"num_inducing_points={num_inducing_points} is greater than\nlen(x)={len(x)}\nwill change to num_inducing_points")
+                    num_inducing_points = len(x)
+
+                M_loc = self.rnd.choice(np.arange(len(x)), num_inducing_points, replace=False)
+                Z = x[M_loc, :]
+            # otherwise put inducing locations on a grid
+            elif inducing_locations == "grid":
+
+                if self.verbose > 3:
+                    print(f"putting inducing points on a grid, target number of points per date: {num_inducing_points}")
+                # put the inducing points within a grid about x_center, y_center
+                x_tmp, y_tmp, t_tmp, _, _ = self._predict_loc_evenly_spaced_in_cell(x=self.x_center,
+                                                                                    y=self.y_center,
+                                                                                    width=2 * self.incl_rad,
+                                                                                    n=num_inducing_points)
+                # combine coordinates
+                z_tmp = np.concatenate([_[:, None] for _ in [x_tmp, y_tmp, t_tmp]], axis=1)
+                # exclude points outside of the inclusion radius from the center)
+                d = np.sqrt((z_tmp[:, 0] - self.x_center)**2 + (z_tmp[:, 1] - self.y_center)**2)
+                z_tmp = z_tmp[d <= (self.incl_rad * 1000), :]
+
+                # provide a grid for each date in range (observation data covers days ahead and behind)
+                t_range = np.arange(-self.days_behind, self.days_ahead + 1)
+                Z_list = []
+
+                #
+                # t0 = time.time()
+                for t in t_range:
+                    z_ = z_tmp.copy()
+                    z_[:, -1] = t
+
+                    # TODO: allow this to be applied to non raw data (?) - will have to change the select
+                    if (keep_within is not None) & self.obs_date['raw_data']:
+                        # keep only values grid points that are within some distance of
+                        if isinstance(keep_within, bool):
+                            assert keep_within != False, f"keep_within provide but is False, expect to only be None, True or float (km)"
+                            gr = self.grid_res
+                            if isinstance(gr, str):
+                                gr = int(re.sub("\D", "", gr))
+                        else:
+                            gr = keep_within
+
+                        select = (self.obs_date.dims['t'] >= (t - 0.5)) & (self.obs_date.dims['t'] < (t + 0.5))
+                        # can check datetimes correspond to a given date with: self.obs_date['t_to_date'][select]
+                        xy_temp = np.array([self.obs_date.dims['x'][select],
+                                            self.obs_date.dims['y'][select]]).T
+                        # build tree with points just for the date
+                        temp_tree = scipy.spatial.cKDTree(xy_temp)
+                        # select only the points of z_ that are within some distance of
+                        # an observation on given date
+                        keep = np.ones(len(z_), dtype=bool)
+                        for _ in range(len(z_)):
+                            z_x, z_y = z_[_, 0], z_[_, 1]
+                            in_range = temp_tree.query_ball_point(x=[z_x, z_y],
+                                                                  r=gr * 1000)
+                            if len(in_range) == 0:
+                                keep[_] = False
+                        z_ = z_[keep, :]
+
+                    Z_list.append(z_)
+
+                # t1 = time.time()
+
+                Z = np.concatenate(Z_list, axis=0)
+
+                # scale Z values by scale_inputs
+                Z *= self.scale_inputs
 
         N = len(x)
         m = gpflow.models.SVGP(kernel=k,
@@ -818,6 +895,10 @@ class SeaIceFreeboard(DataLoader):
                                inducing_variable=Z,
                                mean_function=mean_function,
                                num_data=N)
+
+        self.num_inducing_points = len(Z)
+        if self.verbose >= 3:
+            print(f"number of inducing being used: {self.num_inducing_points}")
 
         self.model = m
 
@@ -1340,36 +1421,42 @@ class SeaIceFreeboard(DataLoader):
 
         return x_pred, y_pred, t_pred, gl0, gl1
 
-    def _predict_loc_evenly_spaced_in_cell(self, grid_loc, n=100):
+    def _predict_loc_evenly_spaced_in_cell(self, grid_loc=None, x=None, y=None, n=100,
+                                           width=None):
         # predict on an evenly spaced grid WITHIN a cell (not on boarder).
         # n is the total number of points
         # will use the square root of n to determine spacing within grid
         # TODO: should just let n be the number of points along side? with total points being n^2?
 
-        # get the x,y valyes
-        x, y = self.aux['x'].vals[grid_loc], self.aux['y'].vals[grid_loc]
+        # get the x,y values
+        if (x is None) & (y is None):
+            assert grid_loc is not None, f'in _predict_loc_evenly_spaced_in_cell grid_loc, x, y are all None'
+            x, y = self.aux['x'].vals[grid_loc], self.aux['y'].vals[grid_loc]
 
-        gr = self.grid_res
-        # if grid_res is a string - i.e. expect 50km
-        if isinstance(gr, str):
-            gr = int(re.sub("\D", "", gr))
+        if width is None:
+            width = self.grid_res
+        # if width / grid_res is a string - i.e. expect 50km
+        if isinstance(width, str):
+            width = int(re.sub("\D", "", width))
         # half of the interval - assuming x,y is at center of square
-        half_ival = (gr * 1000) / 2
+        half_ival = (width * 1000) / 2
 
         n_side = int(np.floor(np.sqrt(n)))
 
         # want to the points to lie within the grid
         # - make evenly spaced values from 0 to grid width, then subtract half width to center
-        _ = np.linspace(0, gr * 1000, n_side + 2) - half_ival
+        _ = np.linspace(0, width * 1000, n_side + 2) - half_ival
         # drop the points on the end, on the boundary
         _ = _[1:-1]
         x_pred, y_pred = np.meshgrid(_, _)
-        t_pred = np.zeros(x_pred.shape)
 
         # add the x,y locations to have x_pred, y_pred now centered about x,y
         x_pred += x
         y_pred += y
 
+        # t_pred is at 0 for both gridded and raw data - for raw data t is shifted by 0.5, such that 0 -> Noon
+        # - confirm with self.obs_date['t_to_date'] values
+        t_pred = np.zeros(x_pred.shape)
         # grid locations - legacy requirement
         gl0, gl1 = np.full(x_pred.shape, np.nan), np.full(x_pred.shape, np.nan)
 
@@ -2203,6 +2290,15 @@ class SeaIceFreeboard(DataLoader):
             x_ = self.aux['x'].vals[grid_loc]
             y_ = self.aux['y'].vals[grid_loc]
 
+            # store some attributes - needed for inducing points on a a grid
+            # TODO: could refactor methods that use these variables / attributes just to use the attributes
+            self.x_center = x_
+            self.y_center = y_
+            # - these could be done else where (above)
+            self.incl_rad = incl_rad
+            self.days_ahead = days_ahead
+            self.days_behind = days_behind
+
             xy_loc = (x_, y_)
 
             # alternatively could use
@@ -2378,21 +2474,14 @@ class SeaIceFreeboard(DataLoader):
 
             # if using svgp
             if (self.engine == "GPflow_svgp") & store_loss:
-                # try:
-                #     elbo = opt_hyp.pop("elbo")
-                #     with shelve.open(os.path.join(date_dir, loss_file), writeback=True) as sdb:
-                #         sdb[repr(xy_loc)] = elbo
-                # except KeyError:
-                #     if self.verbose > 1:
-                #         print(f"'elbo' not in optimisation values, engine: {engine}")
 
                 try:
                     elbo = opt_hyp.pop("elbo")
                     # with shelve.open(os.path.join(date_dir, loss_file), writeback=True) as sdb:
                     #     sdb[repr(xy_loc)] = elbo
+
                     # store in dataframe -> csv
                     # "x": x_, "y_": y_,
-
                     ed = {"grid_loc_0": grid_loc[0], "grid_loc_1": grid_loc[1], 'elbo': elbo}
                     ed['step'] = optimise_params['log_freq'] * np.arange(len(elbo))
                     # include mll on full batch, so can compare final values (elbo could be just for mini-batch)
@@ -2480,7 +2569,8 @@ class SeaIceFreeboard(DataLoader):
                 "opt_runtime": opt_runtime,
                 **{f"scale_{self.length_scale_name[i]}": si
                    for i, si in enumerate(self.scale_inputs)},
-                "scale_output": self.scale_outputs
+                "scale_output": self.scale_outputs,
+                "num_inducing_points": self.num_inducing_points
             }
 
             # store in dataframe - for easy writing / appending to file
