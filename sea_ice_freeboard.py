@@ -1880,6 +1880,7 @@ class SeaIceFreeboard(DataLoader):
             grid_res=25,
             coarse_grid_spacing=1,
             min_inputs=10,
+            max_inputs=None,
             min_sie=0.15,
             engine="GPflow",
             kernel="Matern32",
@@ -1907,7 +1908,8 @@ class SeaIceFreeboard(DataLoader):
             previous_results=None,
             store_params=True,
             calc_on_grid_loc=None,
-            store_loss=False):
+            store_loss=False,
+            take_closest=None):
         """
         wrapper function to run optimal interpolation of sea ice freeboard for a given date
         """
@@ -1959,6 +1961,12 @@ class SeaIceFreeboard(DataLoader):
 
         if previous_results is None:
             previous_results = {}
+
+        if take_closest is None:
+            take_closest = np.inf
+
+        if max_inputs is None:
+            max_inputs = np.inf
 
         # ---
         # check if previous results are correspond to the current results
@@ -2316,7 +2324,8 @@ class SeaIceFreeboard(DataLoader):
             # TODO: move this into a method
             # too few inputs?
             if len(inputs) < min_inputs:
-                # print("too few inputs")
+                if self.verbose >= 4:
+                    print(f"too few inputs: {len(inputs)}")
                 tmp = pd.DataFrame({"grid_loc_0": grid_loc[0],
                                     "grid_loc_1": grid_loc[1],
                                     "reason": f"had only {len(inputs)} inputs"},
@@ -2326,6 +2335,23 @@ class SeaIceFreeboard(DataLoader):
                            header=not os.path.exists(skip_file),
                            index=False)
                 continue
+
+            if len(inputs) > max_inputs:
+                if self.verbose >= 4:
+                    print(f"too many inputs: {len(inputs)}")
+                tmp = pd.DataFrame({"grid_loc_0": grid_loc[0],
+                                    "grid_loc_1": grid_loc[1],
+                                    "reason": f"had too many {len(inputs)} inputs"},
+                                   index=[i])
+
+                tmp.to_csv(skip_file, mode='a',
+                           header=not os.path.exists(skip_file),
+                           index=False)
+                continue
+
+            # if there are 'too many' take only the closest
+            if len(inputs) > take_closest:
+                inputs, outputs = self._take_closest_input_output(inputs, outputs, x_, y_, take_closest)
 
             # HACK: prior_mean_method == "demean_outputs"
             # - here de-mean the outputs, the mean subtracted will depend on the points in radius
@@ -2953,6 +2979,26 @@ class SeaIceFreeboard(DataLoader):
 
         return means
 
+
+    def _take_closest_input_output(self, inputs, outputs, x_, y_, take_closest):
+
+        if self.verbose >= 2:
+            print(
+                f"the number of inputs is: {len(inputs)}, which is greater than take_closest: {take_closest}, taking the closest")
+        # taking closest in terms of physical distance (time is ignored)
+        dist_to_inputs = (inputs[:, 0] - x_) ** 2 + (inputs[:, 1] - y_) ** 2
+
+        # find the index value of the 'take_closest' distance
+        close_dist_idx = np.argsort(dist_to_inputs)[take_closest]
+        # get the corresponding distance and use this to select inputs / outputs to keep
+        # NOTE: this could end up taking more points than take_closest if there many points equally far away (at max distance)
+        closest_select = dist_to_inputs <= dist_to_inputs[close_dist_idx]
+        if self.verbose >= 3:
+            print(f"selecting the closest: {closest_select.sum()} locations")
+        inputs = inputs[closest_select]
+        outputs = outputs[closest_select]
+
+        return inputs, outputs
 
 if __name__ == "__main__":
 
