@@ -1805,8 +1805,9 @@ class SeaIceFreeboard(DataLoader):
             # ---
 
             if clip_and_smooth:
-                # std = 50 / grid_res
-                assert std is not None, f"std in post process is None, please specify"
+                if std is None:
+                    std = 50 / grid_res
+                # assert std is not None, f"std in post process is None, please specify"
                 # --
                 # sie mask
                 # --
@@ -2188,7 +2189,7 @@ class SeaIceFreeboard(DataLoader):
         hp_date = self.post_process(date=previous_results.get("date", date),
                                     current_date=date,
                                     grid_res=grid_res,
-                                    std=coarse_grid_spacing,
+                                    # std=coarse_grid_spacing,
                                     prev_file_suffix=previous_results.get("suffix", None),
                                     prev_results_dir=previous_results.get("dir", None),
                                     **post_process)
