@@ -3,6 +3,7 @@
 import numpy as np
 import pandas as pd
 from numpy.linalg import multi_dot as mdot
+import scipy
 from scipy.spatial.distance import squareform, pdist, cdist
 from pyproj import Transformer
 
@@ -672,7 +673,46 @@ def compare_data_dict_table(d1, d2, date,
 
 
 
+def bin_to_50km_grid(cice, grid_res=50):
+    # used to bin cice model data to 50km grid
+    # binning method follows: CS2S3_CPOM_bin_EASE
+    x_min = -4500000.0
+    y_min = -4500000.0
+    x_max = 4500000.0
+    y_max = 4500000.0
 
+    # 25 km grid spacing
+    n_x_25 = ((x_max - x_min) / (25 * 1000)) + 1
+    n_y_25 = ((y_max - y_min) / (25 * 1000)) + 1
+
+    x_25 = np.linspace(x_min, x_max, int(n_x_25))
+    y_25 = np.linspace(y_min, y_max, int(n_y_25))
+
+    x_25 = x_25[:-1] + np.diff(x_25) / 2
+    y_25 = y_25[:-1] + np.diff(y_25) / 2
+
+    x_in, y_in = np.meshgrid(x_25, y_25)
+
+    # 50 km grid spacing
+    n_x = ((x_max - x_min) / (grid_res * 1000)) + 1
+    n_y = ((y_max - y_min) / (grid_res * 1000)) + 1
+
+    bins = [np.linspace(x_min, x_max, int(n_x)),
+            np.linspace(y_min, y_max, int(n_y))]
+
+    cice_new = []
+    for ci in cice:
+        fb = ci.flatten()
+        x_ = x_in.flatten()
+        y_ = y_in.flatten()
+
+        binned_FB = scipy.stats.binned_statistic_2d(x_, y_, fb,
+                                                    statistic='mean',
+                                                    bins=bins,
+                                                    range=[[x_min, x_max], [y_min, y_max]])
+        cice_new.append(binned_FB[0].T)
+
+    return cice_new
 
 if __name__ == "__main__":
 

@@ -12,10 +12,8 @@ from OptimalInterpolation.utils import plot_pcolormesh
 
 
 
-def plot_hist(ax, data, ylabel):
-    sns.histplot(data=data, kde=True, ax=ax, rasterized=True)
-    ax.set(ylabel=ylabel)
-    ax.set(title="Histogram / Density")
+def plot_hist(ax, data, ylabel, select_bool=None):
+
 
     stats = {
         "mean": np.mean(data),
@@ -24,6 +22,12 @@ def plot_hist(ax, data, ylabel):
         "kurtosis": kurtosis(data),
         "num obs": len(data)
     }
+    hist_data = data if select_bool is None else data[select_bool]
+    sns.histplot(data=data, kde=True, ax=ax, rasterized=True)
+    ax.set(ylabel=ylabel)
+    ax.set(title="Histogram / Density")
+
+
     stats_str = "\n".join([f"{kk}: {vv:.2f}" for kk, vv in stats.items()])
     ax.text(0.2, 0.9, stats_str,
             horizontalalignment='center',
@@ -46,6 +50,9 @@ def compare_data_dict_plot(d1, d2, date, lon, lat,
                            include_diff_hist=False,
                            trim_cdf=False,
                            subtitle=None,
+                           trim_to_quantile=0.005,
+                           vmin=None,
+                           vmax=None,
                            figsize=(10,10)):
 
     if include_diff_cdf | include_diff_hist:
@@ -91,8 +98,12 @@ def compare_data_dict_plot(d1, d2, date, lon, lat,
     # vmin = np.min([np.nanmin(d1_vals), np.nanmin(d2_vals)])
     # vmax = np.max([np.nanmax(d1_vals), np.nanmax(d2_vals)])
 
-    vmin = np.min([np.nanquantile(d1_vals, q=0.005),np.nanquantile(d2_vals, q=0.005)])
-    vmax = np.max([np.nanquantile(d1_vals, q=0.995),np.nanquantile(d2_vals, q=0.995)])
+    if vmin is None:
+        vmin = np.min([np.nanquantile(d1_vals, q=trim_to_quantile),
+                       np.nanquantile(d2_vals, q=trim_to_quantile)])
+    if vmax is None:
+        vmax = np.max([np.nanquantile(d1_vals, q=1-trim_to_quantile),
+                       np.nanquantile(d2_vals, q=1-trim_to_quantile)])
 
     plot_pcolormesh(ax=axes[0],
                     lon=lon,
@@ -145,6 +156,7 @@ def compare_data_dict_plot(d1, d2, date, lon, lat,
         dif /= norm_std
 
     # dif_abs_max = np.nanmean(np.abs(dif))
+    # TODO: set the diff quantile
     dif_abs_max = np.nanquantile(np.abs(dif), q=0.99)
 
     plt_title_norm_diff = "" if norm_std is None else "\ndiffs normalised"
@@ -192,8 +204,13 @@ def compare_data_dict_plot(d1, d2, date, lon, lat,
 
             axes[3].legend(loc=4)
             axes[3].set_title(plt_title)
+        # otherwise plot a histogram
         else:
-            plot_hist(axes[3], dif_sort[cdf_bool], ylabel="")
+            dif_sort_std = np.std(dif_sort)
+            dfm = np.mean(dif_sort)
+            select_bool = ((dif_sort - dfm) >= - 3 * dif_sort_std) & \
+                          ((dif_sort - dfm) <= 3 * dif_sort_std)
+            plot_hist(axes[3], dif_sort[select_bool], ylabel="")
 
 
     plt.tight_layout()
