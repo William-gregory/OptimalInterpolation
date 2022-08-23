@@ -1,6 +1,7 @@
 # various helper functions
 
 import numpy as np
+import pandas as pd
 from numpy.linalg import multi_dot as mdot
 from scipy.spatial.distance import squareform, pdist, cdist
 from pyproj import Transformer
@@ -15,6 +16,8 @@ import re
 import os
 import shutil
 import numba as nb
+
+
 
 def grid_proj(lon_0=0, boundinglat=60, llcrnrlon=False,
               llcrnrlat=False, urcrnrlon=False, urcrnrlat=False):
@@ -620,6 +623,52 @@ def rolling_mean(loc_obs, mean_array, window, trailing):
                 mean_array[i] = np.nanmean(_)
                 # count_array[i] = (~np.isnan(_)).sum()
     return mean_array
+
+
+def clean_file_name(s):
+    """remove unwanted characters from file name"""
+    # https://stackoverflow.com/questions/295135/turn-a-string-into-a-valid-filename
+    return "".join(x for x in s if (x.isalnum() or x in "._- "))
+
+
+
+def stats_on_vals(vals, measure=None, name=None):
+    """given a vals (np.array) get a DataFrame of some descriptive stats"""
+    out = {}
+    out['measure'] = measure
+    out['size'] = vals.size
+    out['num_not_nan'] = (~np.isnan(vals)).sum()
+    out['num_inf'] = np.isinf(vals).sum()
+    out['min'] = np.nanmin(vals)
+    out['mean'] = np.nanmean(vals)
+    out['max'] = np.nanmax(vals)
+    out['std'] = np.nanstd(vals)
+
+    qs = [0.05] + np.arange(0.1, 1.0, 0.1).tolist() + [0.95]
+    quantiles = {f"q{q:.2f}": np.nanquantile(vals, q=q) for q in qs}
+    out = {**out, **quantiles}
+
+    columns = None if name is None else [name]
+    return pd.DataFrame.from_dict(out, orient='index', columns=columns)
+
+
+
+def compare_data_dict_table(d1, d2, date,
+                            d1_measure=None,
+                            d2_measure=None,
+                            d1_col_name=None,
+                            d2_col_name=None):
+    d1 = d1.subset(select_dims={'date': date})
+    d2 = d2.subset(select_dims={'date': date})
+
+    d1_vals = np.squeeze(d1.vals)
+    d2_vals = np.squeeze(d2.vals)
+
+    _ = pd.concat([stats_on_vals(d1_vals, measure=d1_measure, name=d1_col_name),
+                   stats_on_vals(d2_vals, measure=d2_measure, name=d2_col_name),
+                   stats_on_vals(d1_vals - d2_vals, measure=f"{d1_col_name} - {d2_col_name}", name="diff")], axis=1)
+
+    return _
 
 
 
