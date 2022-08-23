@@ -1942,6 +1942,25 @@ class SeaIceFreeboard(DataLoader):
         # res = sifb.read_results(results_dir, file="results.csv", grid_res_loc=grid_res, grid_size=big_grid_size,
         #                         unflatten=True)
 
+        # ----
+        # get the input parameters
+        # ---
+
+        # taken from answers:
+        # https://stackoverflow.com/questions/218616/how-to-get-method-parameter-names
+        config = {}
+        locs = locals()
+        for k in range(self.run.__code__.co_argcount):
+            var = self.run.__code__.co_varnames[k]
+            if isinstance(locs[var], np.ndarray):
+                config[var] = locs[var].tolist()
+            else:
+                config[var] = locs[var]
+
+        # ---
+        # files names - append suffix
+        # ---
+
         result_file = f"results{file_suffix}.csv"
         prediction_file = f"prediction{file_suffix}.csv"
         config_file = f"input_config{file_suffix}.json"
@@ -1949,7 +1968,11 @@ class SeaIceFreeboard(DataLoader):
         param_file = f"params{file_suffix}"
         loss_file = f"loss{file_suffix}.csv"
 
-        # default dict if provided as None
+        # ---
+        # set defaults if None provided
+        # ---
+
+        # NOTE: any input parameters modifications will be reflected when written to file
 
         if post_process is None:
             post_process = {}
@@ -1985,22 +2008,6 @@ class SeaIceFreeboard(DataLoader):
             # inducing_point_params.pop("min_obs_for_svgp")
             inducing_point_params = {k:v for k,v in inducing_point_params.items() if k != "min_obs_for_svgp"}
 
-        # ----
-        # get the input parameters
-        # ---
-
-        # taken from answers:
-        # https://stackoverflow.com/questions/218616/how-to-get-method-parameter-names
-        config = {}
-        locs = locals()
-        for k in range(self.run.__code__.co_argcount):
-            var = self.run.__code__.co_varnames[k]
-            if isinstance(locs[var], np.ndarray):
-                config[var] = locs[var].tolist()
-            else:
-                config[var] = locs[var]
-
-        # config['kwargs'] = locs['kwargs']
 
         # ---
         # modify / interpret parameters
