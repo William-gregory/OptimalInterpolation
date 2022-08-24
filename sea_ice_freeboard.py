@@ -368,6 +368,7 @@ class SeaIceFreeboard(DataLoader):
         if self.verbose >= 2:
             print(f"-- set X_tree attribute: xy_train.shape = {xy_train.shape}"
                   f"xy_train.dtype = {xy_train.dtype} ")
+        assert False, "FAKE ERROR: REMOVE"
         # make a KD tree for selecting point
         _ = spatial.KDTree(xy_train)
         if self.verbose >= 2:
