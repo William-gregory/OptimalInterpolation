@@ -369,6 +369,9 @@ class SeaIceFreeboard(DataLoader):
         # make a KD tree for selecting point
         self.X_tree = scipy.spatial.cKDTree(xy_train)
 
+        if self.verbose >= 2:
+            print("-- finished build_kd_tree")
+
     def _check_xy_lon_lat(self,
                           x=None,
                           y=None,
