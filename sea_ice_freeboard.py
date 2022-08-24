@@ -366,7 +366,8 @@ class SeaIceFreeboard(DataLoader):
         # yx_train = np.array([_['y'], _['x']]).T
         xy_train = np.array([_.dims['x'], _.dims['y']]).T
         if self.verbose >= 2:
-            print(f"-- set X_tree attribute: xy_train.shape = {xy_train.shape} ")
+            print(f"-- set X_tree attribute: xy_train.shape = {xy_train.shape}"
+                  f"xy_train.dtype = {xy_train.dtype} ")
         # make a KD tree for selecting point
         _ = spatial.cKDTree(xy_train)
         if self.verbose >= 2:
