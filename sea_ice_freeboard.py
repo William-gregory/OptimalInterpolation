@@ -373,10 +373,10 @@ class SeaIceFreeboard(DataLoader):
         # assert False, "FAKE ERROR: REMOVE"
         # make a KD tree for selecting point
         print("building fake tree")
-        xy_train_fake = np.random.normal(0, 1, (9126, 2))
+        xy_train_fake = np.random.normal(0, 1, (912682, 2))
         _ = KDTree(xy_train_fake)
         print("built fake")
-        _ = KDTree(xy_train)
+        _ = KDTree(xy_train.copy())
         if self.verbose >= 2:
             print("-- made tree, setting as X_tree")
         self.X_tree = _
