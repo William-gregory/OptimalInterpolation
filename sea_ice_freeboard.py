@@ -6,7 +6,7 @@ import copy
 import gpflow
 import numpy as np
 import pandas as pd
-# import scipy
+import scipy
 # from scipy import spatial
 from scipy.spatial import KDTree
 import warnings
@@ -368,12 +368,13 @@ class SeaIceFreeboard(DataLoader):
         xy_train = np.array([_.dims['x'], _.dims['y']]).T
         if self.verbose >= 2:
             print(f"-- set X_tree attribute: xy_train.shape = {xy_train.shape}"
-                  f"xy_train.dtype = {xy_train.dtype} ")
+                  f" xy_train.dtype = {xy_train.dtype} "
+                  f" np.isnan(xy_train.dtype).any() = {np.isnan(xy_train.dtype).any()} ")
         # assert False, "FAKE ERROR: REMOVE"
         # make a KD tree for selecting point
         print("building fake tree")
         xy_train_fake = np.random.normal(0, 1, (9126, 2))
-        _ = scipy.spatial.cKDTree(xy_train)
+        _ = KDTree(xy_train_fake)
         print("built fake")
         _ = KDTree(xy_train)
         if self.verbose >= 2:
