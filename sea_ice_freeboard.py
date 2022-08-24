@@ -369,7 +369,7 @@ class SeaIceFreeboard(DataLoader):
         if self.verbose >= 2:
             print(f"-- set X_tree attribute: xy_train.shape = {xy_train.shape}"
                   f" xy_train.dtype = {xy_train.dtype} "
-                  f" np.isnan(xy_train.dtype).any() = {np.isnan(xy_train.dtype).any()} ")
+                  f" np.isnan(xy_train.dtype).any() = {np.isnan(xy_train).any()} ")
         # assert False, "FAKE ERROR: REMOVE"
         # make a KD tree for selecting point
         print("building fake tree")
