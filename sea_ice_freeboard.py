@@ -6,8 +6,9 @@ import copy
 import gpflow
 import numpy as np
 import pandas as pd
-import scipy
-from scipy import spatial
+# import scipy
+# from scipy import spatial
+from scipy.spatial import KDTree
 import warnings
 import datetime
 import time
@@ -368,9 +369,9 @@ class SeaIceFreeboard(DataLoader):
         if self.verbose >= 2:
             print(f"-- set X_tree attribute: xy_train.shape = {xy_train.shape}"
                   f"xy_train.dtype = {xy_train.dtype} ")
-        assert False, "FAKE ERROR: REMOVE"
+        # assert False, "FAKE ERROR: REMOVE"
         # make a KD tree for selecting point
-        _ = spatial.KDTree(xy_train)
+        _ = KDTree(xy_train)
         if self.verbose >= 2:
             print("-- made tree, setting as X_tree")
         self.X_tree = _
@@ -473,7 +474,7 @@ class SeaIceFreeboard(DataLoader):
         # combine xy data - used for KDtree
         xy_train = np.array([out[0], out[1]]).T
         # make a KD tree for selecting point
-        self.X_tree = scipy.spatial.cKDTree(xy_train)
+        self.X_tree = KDTree(xy_train)
 
         return out
 
@@ -538,6 +539,8 @@ class SeaIceFreeboard(DataLoader):
         keys = ["date", "days_ahead", "days_behind"]
         params_match = [self.input_params[keys[i]] == _
                         for i, _ in enumerate([date, days_ahead, days_behind])]
+
+        # TODO: review this - should be removed?
         if not all(params_match):
 
             # select subset of date
@@ -897,7 +900,7 @@ class SeaIceFreeboard(DataLoader):
                         xy_temp = np.array([self.obs_date.dims['x'][select],
                                             self.obs_date.dims['y'][select]]).T
                         # build tree with points just for the date
-                        temp_tree = scipy.spatial.cKDTree(xy_temp)
+                        temp_tree = KDTree(xy_temp)
                         # select only the points of z_ that are within some distance of
                         # an observation on given date
                         keep = np.ones(len(z_), dtype=bool)
@@ -3032,7 +3035,7 @@ class SeaIceFreeboard(DataLoader):
         # make a KDtree from all the location pairs
         x_grid, y_grid = np.meshgrid(self.obs.dims['x'], self.obs.dims['y'])
         xy_comb = np.concatenate([x_grid.flatten()[:, None], y_grid.flatten()[:, None]], axis=1)
-        xy_tree = scipy.spatial.cKDTree(xy_comb)
+        xy_tree = KDTree(xy_comb)
 
         t0 = time.time()
         for mloc in np.arange(has_obs.sum()):
