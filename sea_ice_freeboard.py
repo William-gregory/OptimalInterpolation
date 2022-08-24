@@ -376,7 +376,10 @@ class SeaIceFreeboard(DataLoader):
         xy_train_fake = np.random.normal(0, 1, (912682, 2))
         _ = KDTree(xy_train_fake)
         print("built fake")
-        _ = KDTree(xy_train.copy())
+        print("building real tree - copying data")
+        xyt = xy_train.copy()
+        print("copied")
+        _ = KDTree(xyt)
         if self.verbose >= 2:
             print("-- made tree, setting as X_tree")
         self.X_tree = _
