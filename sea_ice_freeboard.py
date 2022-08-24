@@ -474,6 +474,8 @@ class SeaIceFreeboard(DataLoader):
 
         # TODO: allow to be explict of which data to use - raw or not
         # select data for a given date (include some days ahead / behind)
+        if self.verbose:
+            print("- select_obs_date")
         self.select_obs_date(date,
                              days_ahead=days_ahead,
                              days_behind=days_behind,
@@ -481,17 +483,26 @@ class SeaIceFreeboard(DataLoader):
 
         assert self.obs_date['raw_data'] == use_raw_data, f"obs_date['raw_data']={self.obs_date['raw_data']} != {use_raw_data}=use_raw_data "
 
+        if self.verbose:
+            print("- remove_hold_out_obs_date")
         # set values on date for hold_out (satellites) to nan
         self.remove_hold_out_obs_date(hold_out=hold_out)
 
         # calculate the mean for values obs
+
+        if self.verbose:
+            print("- prior_mean")
         self.prior_mean(date,
                         method=prior_mean_method)
 
         # de-mean the observation (used for the calculation on the given date)
+        if self.verbose:
+            print("- demean_obs_date")
         self.demean_obs_date()
 
         # build KD-tree
+        if self.verbose:
+            print("- build_kd_tree")
         self.build_kd_tree(min_sie=min_sie)
 
     def select_data_for_date_location(self, date,
