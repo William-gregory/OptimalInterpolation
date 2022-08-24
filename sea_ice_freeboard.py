@@ -343,6 +343,9 @@ class SeaIceFreeboard(DataLoader):
         - nans will be removed
         - if min_sie is not None will use to remove locations with insufficient sea ice extent"""
 
+        if self.verbose >= 2:
+            print("-- select data for kd_tree")
+
         if min_sie is None:
             sie_bool = True
         else:
@@ -361,6 +364,8 @@ class SeaIceFreeboard(DataLoader):
         # combine xy data - used for KDtree
         # yx_train = np.array([_['y'], _['x']]).T
         xy_train = np.array([_.dims['x'], _.dims['y']]).T
+        if self.verbose >= 2:
+            print(f"-- set X_tree attribute: xy_train.shape = {xy_train.shape} ")
         # make a KD tree for selecting point
         self.X_tree = scipy.spatial.cKDTree(xy_train)
 
