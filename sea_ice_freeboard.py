@@ -57,7 +57,11 @@ class PurePythonGPR():
         kv = np.array([self.kernel_var]) if isinstance(self.kernel_var, (float, int)) else self.kernel_var
         lv = np.array([self.likeli_var]) if isinstance(self.likeli_var, (float, int)) else self.likeli_var
 
-        x0 = np.concatenate([self.length_scales, kv, lv])
+        try:
+            x0 = np.concatenate([self.length_scales, kv, lv])
+        except ValueError:
+            # HACK: to deal with a dimension mis match
+            x0 = np.concatenate([self.length_scales, np.array([kv]), np.array([lv])])
         # take the log of x0 because the first step in SMLII is to take exp
         x0 = np.log(x0)
         res = scipy.optimize.minimize(self.SMLII,
