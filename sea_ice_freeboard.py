@@ -1278,12 +1278,12 @@ class SeaIceFreeboard(DataLoader):
                                    grid_loc,
                                    predict_locations=None,
                                    use_raw_data=False,
-                                   coarse_grid_spacing=1):
+                                   predict_in_neighbouring_cells=0):
         """get x,y location about some grid location"""
-
+        if self.verbose > 3:
+            print("prediction locations:")
         # prediction locations
         # "center_only"
-        # "neighbouring_grid_centers"
         # "obs_in_cell"
         # {"name": "evenly_spaced_in_grid_cell": "n": 100}
 
@@ -1295,55 +1295,76 @@ class SeaIceFreeboard(DataLoader):
         if not isinstance(predict_locations, list):
             predict_locations = [predict_locations]
 
-        # TODO: concatenate all the prediction arrays
+        # valid_pred_loc = ["center_only", "obs_in_cell"]
+        # for pl in predict_locations:
+        #     assert pl in []
+
+        # get the neigbouring cells to predict in
+        _, _, _, ngl0, ngl1 = self._predict_loc_neighbour_center(grid_loc, predict_in_neighbouring_cells)
+
+        # store predict
         xlist, ylist, tlist, g0list, g1list, namelist = [], [], [], [], [], []
-        for pred_loc in predict_locations:
-            if self.verbose > 3:
-                print(f"pred_loc: {pred_loc}")
 
-            add_to_list = True
+        # increment over the neighbouring cells making predictions in
+        # - if in_neighbouring_cell = 0 then it will just be current cell: grid_loc
+        ngrid_locs = np.concatenate([ngl0[:, None], ngl1[:, None]], axis=1)
+        for ngrid_loc in ngrid_locs:
 
-            # center location only
-            if pred_loc == "center_only":
-                x_pred, y_pred, t_pred, gl0, gl1 = self._predict_loc_center(grid_loc, use_raw_data)
-                pname = np.full(x_pred.shape, pred_loc)
-            # observations in cell - from held_out data
-            elif pred_loc == "obs_in_cell":
-                # NOTE: if not using held out data this won't work, and if it's the only
-                # pred_loc in prediction_locations then it will crash
-                x_pred, y_pred, t_pred, gl0, gl1 = self._predict_loc_obs_in_cell(grid_loc)
-                pname = np.full(x_pred.shape, pred_loc)
-                if np.isnan(x_pred).any():
-                    add_to_list = False
-            # center of neighbouring cells - will include center
-            elif pred_loc == "neighbour_cell_centers":
-                x_pred, y_pred, t_pred, gl0, gl1 = self._predict_loc_neighbour_center(grid_loc, coarse_grid_spacing)
-                pname = np.full(x_pred.shape, pred_loc)
-            # predict at even locations within a cell
-            elif isinstance(pred_loc, dict):
-                if pred_loc['name'] == "evenly_spaced_in_cell":
-                    pred_n = int(pred_loc.get("n", 100))
-                    x_pred, y_pred, t_pred, gl0, gl1 = self._predict_loc_evenly_spaced_in_cell(grid_loc, n=pred_n)
-                    pname = np.full(x_pred.shape, f"evenly_spaced_in_cell{pred_n}")
+            ngrid_loc = tuple(ngrid_loc)
+            if self.verbose > 4:
+                print(f"grid_cell: {ngrid_loc}")
+
+            # TODO: concatenate all the prediction arrays
+
+            for pred_loc in predict_locations:
+                if self.verbose > 4:
+                    print(f"pred_loc: {pred_loc}")
+
+                add_to_list = True
+
+                # center location only
+                if pred_loc == "center_only":
+                    x_pred, y_pred, t_pred, gl0, gl1 = self._predict_loc_center(ngrid_loc, use_raw_data)
+                    pname = np.full(x_pred.shape, pred_loc)
+                # observations in cell - from held_out data
+                elif pred_loc == "obs_in_cell":
+                    # NOTE: if not using held out data this won't work, and if it's the only
+                    # pred_loc in prediction_locations then it will crash
+                    x_pred, y_pred, t_pred, gl0, gl1 = self._predict_loc_obs_in_cell(ngrid_loc)
+                    pname = np.full(x_pred.shape, pred_loc)
+                    if np.isnan(x_pred).any():
+                        add_to_list = False
+
+                # center of neighbouring cells - will include center
+                # elif pred_loc == "neighbour_cell_centers":
+                #     x_pred, y_pred, t_pred, gl0, gl1 = self._predict_loc_neighbour_center(grid_loc, coarse_grid_spacing)
+                #     pname = np.full(x_pred.shape, pred_loc)
+
+                # predict at even locations within a cell
+                elif isinstance(pred_loc, dict):
+                    if pred_loc['name'] == "evenly_spaced_in_cell":
+                        pred_n = int(pred_loc.get("n", 100))
+                        x_pred, y_pred, t_pred, gl0, gl1 = self._predict_loc_evenly_spaced_in_cell(ngrid_loc, n=pred_n)
+                        pname = np.full(x_pred.shape, f"evenly_spaced_in_cell{pred_n}")
+                    else:
+                        print(f"pred_loc was dict: {pred_loc} BUT 'name': {pred_loc['name']} NOT UNDERSTOOD, SKIPPING!")
+                        warnings.warn(f"pred_loc was dict: {pred_loc} BUT 'name': {pred_loc['name']} NOT UNDERSTOOD, SKIPPING!")
+                        add_to_list = False
+
                 else:
-                    print(f"pred_loc was dict: {pred_loc} BUT 'name': {pred_loc['name']} NOT UNDERSTOOD, SKIPPING!")
-                    warnings.warn(f"pred_loc was dict: {pred_loc} BUT 'name': {pred_loc['name']} NOT UNDERSTOOD, SKIPPING!")
+                    print(f"pred_loc: {pred_loc} NOT UNDERSTOOD, SKIPPING!")
+                    warnings.warn(f"pred_loc: {pred_loc} NOT UNDERSTOOD, SKIPPING!")
                     add_to_list = False
 
-            else:
-                print(f"pred_loc: {pred_loc} NOT UNDERSTOOD, SKIPPING!")
-                warnings.warn(f"pred_loc: {pred_loc} NOT UNDERSTOOD, SKIPPING!")
-                add_to_list = False
-
-            # if there was no issue with getting prediction locations
-            if add_to_list:
-                # NOTE: appending like this is not very pythonic
-                xlist.append(x_pred)
-                ylist.append(y_pred)
-                tlist.append(t_pred)
-                g0list.append(gl0)
-                g1list.append(gl1)
-                namelist.append(pname)
+                # if there was no issue with getting prediction locations
+                if add_to_list:
+                    # NOTE: appending like this is not very pythonic
+                    xlist.append(x_pred)
+                    ylist.append(y_pred)
+                    tlist.append(t_pred)
+                    g0list.append(gl0)
+                    g1list.append(gl1)
+                    namelist.append(pname)
 
 
         # out = [x_pred, y_pred, t_pred, gl0, gl1]
@@ -1369,6 +1390,7 @@ class SeaIceFreeboard(DataLoader):
         return np.array([x]), np.array([y]), np.array([0]), np.array([grid_loc[0]]), np.array([grid_loc[1]])
 
     def _predict_loc_neighbour_center(self, grid_loc, coarse_grid_spacing):
+        # NOTE: it is possible to predict on location where there is no sea ice
         # predict within some coarse_grid_spacing of the center grid cell
         gl0 = grid_loc[0] + np.arange(-coarse_grid_spacing, coarse_grid_spacing + 1)
         gl1 = grid_loc[1] + np.arange(-coarse_grid_spacing, coarse_grid_spacing + 1)
@@ -1421,7 +1443,8 @@ class SeaIceFreeboard(DataLoader):
         # y_pred = np.concatenate([y_pred, np.array([y])])
         # t_pred = np.concatenate([t_pred, np.array([0])])
 
-        gl0, gl1 = np.full(x_pred.shape, np.nan), np.full(x_pred.shape, np.nan)
+        # gl0, gl1 = np.full(x_pred.shape, np.nan), np.full(x_pred.shape, np.nan)
+        gl0, gl1 = np.full(x_pred.shape, grid_loc[0]), np.full(x_pred.shape, grid_loc[1])
 
         return x_pred, y_pred, t_pred, gl0, gl1
 
@@ -1462,7 +1485,10 @@ class SeaIceFreeboard(DataLoader):
         # - confirm with self.obs_date['t_to_date'] values
         t_pred = np.zeros(x_pred.shape)
         # grid locations - legacy requirement
-        gl0, gl1 = np.full(x_pred.shape, np.nan), np.full(x_pred.shape, np.nan)
+        if grid_loc is None:
+            gl0, gl1 = np.full(x_pred.shape, np.nan), np.full(x_pred.shape, np.nan)
+        else:
+            gl0, gl1 = np.full(x_pred.shape, grid_loc[0]), np.full(x_pred.shape, grid_loc[1])
 
         return x_pred.flatten(), y_pred.flatten(), t_pred.flatten(), gl0.flatten(), gl1.flatten()
 
@@ -1914,7 +1940,8 @@ class SeaIceFreeboard(DataLoader):
             store_params=True,
             calc_on_grid_loc=None,
             store_loss=False,
-            take_closest=None):
+            take_closest=None,
+            predict_in_neighbouring_cells=0):
         """
         wrapper function to run optimal interpolation of sea ice freeboard for a given date
         """
@@ -2495,7 +2522,7 @@ class SeaIceFreeboard(DataLoader):
                 self.get_neighbours_of_grid_loc(grid_loc,
                                                 predict_locations=predict_locations,
                                                 use_raw_data=use_raw_data,
-                                                coarse_grid_spacing=coarse_grid_spacing)
+                                                predict_in_neighbouring_cells=predict_in_neighbouring_cells)
 
             preds = self.predict_freeboard(x=x_pred,
                                            y=y_pred,
@@ -2511,10 +2538,19 @@ class SeaIceFreeboard(DataLoader):
                     sdb[repr(xy_loc)] = parameter_dict(self.model)
 
             # if using svgp
-            if (self.engine == "GPflow_svgp") & store_loss:
-
+            if (self.engine == "GPflow_svgp") :
+                # extract the elbo from opt_hyp
                 try:
                     elbo = opt_hyp.pop("elbo")
+                except KeyError:
+                    elbo = None
+                    if self.verbose > 1:
+                        print(f"'elbo' not in optimisation values, engine: {engine}")
+
+                # if want to store loss (and elbo extracted) write to file
+                # TODO: determine when 'elbo' won't be able to be pop from opt_hyp if engine = "GPflow_svgp"
+                if store_loss & (elbo is not None):
+
                     # with shelve.open(os.path.join(date_dir, loss_file), writeback=True) as sdb:
                     #     sdb[repr(xy_loc)] = elbo
 
@@ -2528,9 +2564,6 @@ class SeaIceFreeboard(DataLoader):
                     los_file = os.path.join(date_dir, loss_file)
                     edf.to_csv(los_file, mode="a", header=not os.path.exists(los_file),
                                index=False)
-                except KeyError:
-                    if self.verbose > 1:
-                            print(f"'elbo' not in optimisation values, engine: {engine}")
 
             # ----
             # store values in DataFrame
