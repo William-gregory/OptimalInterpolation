@@ -371,7 +371,10 @@ class SeaIceFreeboard(DataLoader):
                   f" xy_train.dtype = {xy_train.dtype} "
                   f" np.isnan(xy_train.dtype).any() = {np.isnan(xy_train).any()} "
                   f" np.min(xy_train) = {np.min(xy_train)} ",
-                  f" np.max(xy_train) = {np.max(xy_train)} ")
+                  f" np.max(xy_train) = {np.max(xy_train)} ",
+                  f" xy_train[:10,:] = {xy_train[:10,:]}"
+                  f" xy_train[-10:,:] = {xy_train[-10, :]}")
+
         # assert False, "FAKE ERROR: REMOVE"
         # make a KD tree for selecting point
         print("building fake tree")
@@ -379,10 +382,13 @@ class SeaIceFreeboard(DataLoader):
         _ = KDTree(xy_train_fake)
         print("built fake")
         print("building real tree - copying data")
-        xyt = xy_train.copy()
-        print("copied, adding 0.0 and set as type float")
-        xyt = xyt + 0.0
-        xyt = xyt.astype('float')
+        # xyt = xy_train.copy()
+        # print("copied, adding 0.0 and set as type float")
+        # xyt = xyt + 0.0
+        # xyt = xyt.astype('float')
+        import copy
+        print("deepcopy")
+        xyt = copy.deepcopy(xy_train)
         _ = KDTree(xyt)
         if self.verbose >= 2:
             print("-- made tree, setting as X_tree")
