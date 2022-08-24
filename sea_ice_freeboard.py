@@ -2210,7 +2210,10 @@ class SeaIceFreeboard(DataLoader):
         # write config to file - will end up doing this for each date
         # ---
 
-        with open(os.path.join(date_dir, config_file), "w") as f:
+        date_config_file = os.path.join(date_dir, config_file)
+        if self.verbose:
+            print(f"writing config to file:\n{date_config_file}")
+        with open(date_config_file, "w") as f:
             json.dump(config, f, indent=4)
 
         # -------
@@ -2224,6 +2227,8 @@ class SeaIceFreeboard(DataLoader):
                               " use prev_results dict instead (for 'dir' and 'suffix'")
                 post_process.pop(prtmp)
 
+        if self.verbose:
+            print("running post_process")
         hp_date = self.post_process(date=previous_results.get("date", date),
                                     current_date=date,
                                     grid_res=grid_res,
@@ -2238,6 +2243,8 @@ class SeaIceFreeboard(DataLoader):
         # select data for given date
         # --
 
+        if self.verbose:
+            print("running select_data_for_given_date")
         # TODO: allow prior mean method to be specified differently
         self.select_data_for_given_date(date=date,
                                         days_ahead=days_ahead,
@@ -2251,6 +2258,8 @@ class SeaIceFreeboard(DataLoader):
         # locations to calculate GP on
         # ----
 
+        if self.verbose:
+            print("running select_gp_locations")
         gp_locs = self.select_gp_locations(date=date,
                                            min_sie=min_sie,
                                            coarse_grid_spacing=coarse_grid_spacing,
