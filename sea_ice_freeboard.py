@@ -369,7 +369,7 @@ class SeaIceFreeboard(DataLoader):
             print(f"-- set X_tree attribute: xy_train.shape = {xy_train.shape}"
                   f"xy_train.dtype = {xy_train.dtype} ")
         # make a KD tree for selecting point
-        _ = spatial.cKDTree(xy_train)
+        _ = spatial.KDTree(xy_train)
         if self.verbose >= 2:
             print("-- made tree, setting as X_tree")
         self.X_tree = _
