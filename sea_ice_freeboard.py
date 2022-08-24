@@ -7,6 +7,7 @@ import gpflow
 import numpy as np
 import pandas as pd
 import scipy
+from scipy import spatial
 import warnings
 import datetime
 import time
@@ -367,7 +368,7 @@ class SeaIceFreeboard(DataLoader):
         if self.verbose >= 2:
             print(f"-- set X_tree attribute: xy_train.shape = {xy_train.shape} ")
         # make a KD tree for selecting point
-        self.X_tree = scipy.spatial.cKDTree(xy_train)
+        self.X_tree = spatial.cKDTree(xy_train)
 
         if self.verbose >= 2:
             print("-- finished build_kd_tree")
