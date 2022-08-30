@@ -67,6 +67,7 @@ class DataDict(dict):
         assert isinstance(vals, np.ndarray), f"vals expected to be np.ndarray, got {type(vals)}"
         assert isinstance(dims, (dict, type(None))), f"dims expected to be np.ndarray, got {type(dims)}"
 
+        # TODO: double check dims match vals when is_flat=False
         # if dims not provided, default to numbered idx values
         if dims is None:
             if default_dim_name is None:
@@ -606,7 +607,11 @@ class DataDict(dict):
         return DataDict(vals=vals, dims=dims, is_flat=obs_flat, name=name)
 
     def not_nan(self, inplace=False):
-        return self.subset(select_array=~np.isnan(self.vals), inplace=inplace)
+        try:
+            return self.subset(select_array=~np.isnan(self.vals), inplace=inplace)
+        except TypeError as e:
+            # pd.isnull can handle different input types, but is slower(?) than np.isnan
+            return self.subset(select_array=~pd.isnull(self.vals), inplace=inplace)
 
     def to_dataframe(self):
         """convert to pandas DataFrame"""
