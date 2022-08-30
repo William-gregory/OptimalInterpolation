@@ -639,8 +639,12 @@ class DataLoader():
             # check the input_config file
             date_conf_file = os.path.join(results_dir, date, f"input_config{file_suffix}.json")
 
-            with open(date_conf_file, "r") as f:
-                dconf = json.load(f)
+            try:
+                with open(date_conf_file, "r") as f:
+                    dconf = json.load(f)
+            except FileNotFoundError:
+                print(f"FileNotFoundError: date_conf_file:\n{date_conf_file}\nskipping")
+                continue
 
             if strict:
                 if not self._compare_dicts(config, dconf, chk_keys):

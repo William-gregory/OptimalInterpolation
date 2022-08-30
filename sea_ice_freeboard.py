@@ -373,7 +373,7 @@ class SeaIceFreeboard(DataLoader):
                   f" np.min(xy_train) = {np.min(xy_train)} ",
                   f" np.max(xy_train) = {np.max(xy_train)} ",
                   f" xy_train[:10,:] = {xy_train[:10,:]}"
-                  f" xy_train[-10:,:] = {xy_train[-10, :]}")
+                  f" xy_train[-10:,:] = {xy_train[-10:, :]}")
 
         # assert False, "FAKE ERROR: REMOVE"
         # make a KD tree for selecting point
