@@ -367,29 +367,9 @@ class SeaIceFreeboard(DataLoader):
         # yx_train = np.array([_['y'], _['x']]).T
         xy_train = np.array([_.dims['x'], _.dims['y']]).T
         if self.verbose >= 2:
-            print(f"-- set X_tree attribute: xy_train.shape = {xy_train.shape}"
-                  f" xy_train.dtype = {xy_train.dtype} "
-                  f" np.isnan(xy_train.dtype).any() = {np.isnan(xy_train).any()} "
-                  f" np.min(xy_train) = {np.min(xy_train)} ",
-                  f" np.max(xy_train) = {np.max(xy_train)} ",
-                  f" xy_train[:10,:] = {xy_train[:10,:]}"
-                  f" xy_train[-10:,:] = {xy_train[-10:, :]}")
+            print(f"-- set X_tree attribute: xy_train.shape = {xy_train.shape}")
 
-        # assert False, "FAKE ERROR: REMOVE"
-        # make a KD tree for selecting point
-        print("building fake tree")
-        xy_train_fake = np.random.normal(0, 1, (912682, 2))
-        _ = KDTree(xy_train_fake)
-        print("built fake")
-        print("building real tree - copying data")
-        # xyt = xy_train.copy()
-        # print("copied, adding 0.0 and set as type float")
-        # xyt = xyt + 0.0
-        # xyt = xyt.astype('float')
-        import copy
-        print("deepcopy")
-        xyt = copy.deepcopy(xy_train)
-        _ = KDTree(xyt)
+        _ = KDTree(xy_train)
         if self.verbose >= 2:
             print("-- made tree, setting as X_tree")
         self.X_tree = _
@@ -2226,6 +2206,8 @@ class SeaIceFreeboard(DataLoader):
 
         prior_rdf = pd.DataFrame(columns=["grid_loc_0", "grid_loc_1"])
         if overwrite:
+            if self.vebose:
+                print(f"overwrite = {overwrite}, moving files to Archive folder")
             param_files = [param_file + _ for _ in ['.bak', '.dir', '.dat', '.pkl', '.db']]
             move_to_archive(top_dir=date_dir,
                             file_names=[config_file,
