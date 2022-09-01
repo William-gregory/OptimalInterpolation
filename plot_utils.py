@@ -12,27 +12,40 @@ from OptimalInterpolation.utils import plot_pcolormesh
 
 
 
-def plot_hist(ax, data, ylabel, select_bool=None):
+def plot_hist(ax, data,
+              title="Histogram / Density",
+              ylabel=None,
+              xlabel=None,
+              select_bool=None,
+              stats_values=None,
+              stats_loc = (0.2, 0.9)):
 
-
-    stats = {
-        "mean": np.mean(data),
-        "std": np.std(data),
-        "skew": skew(data),
-        "kurtosis": kurtosis(data),
-        "num obs": len(data)
-    }
     hist_data = data if select_bool is None else data[select_bool]
-    sns.histplot(data=data, kde=True, ax=ax, rasterized=True)
+    sns.histplot(data=hist_data, kde=True, ax=ax, rasterized=True)
     ax.set(ylabel=ylabel)
-    ax.set(title="Histogram / Density")
+    ax.set(xlabel=xlabel)
+    ax.set(title=title)
 
+    # provide stats if stats values is not None
+    if stats_values is not None:
+        stats = {
+            "mean": np.mean(data),
+            "std": np.std(data),
+            "skew": skew(data),
+            "kurtosis": kurtosis(data),
+            "num obs": len(data)
+        }
 
-    stats_str = "\n".join([f"{kk}: {vv:.2f}" for kk, vv in stats.items()])
-    ax.text(0.2, 0.9, stats_str,
-            horizontalalignment='center',
-            verticalalignment='center',
-            transform=ax.transAxes)
+        stats_values = [stats_values] if isinstance(stats_values, str) else stats_values
+        for sv in stats_values:
+            assert sv in stats, f"stats_values: {sv} not in stats: {list(stats.keys)}"
+        stats = {_: stats[_] for _ in stats_values}
+        stats_str = "\n".join([f"{kk}: {vv:.2f}" if isinstance(vv, float) else f"{kk}: {vv:d}"
+                               for kk, vv in stats.items()])
+        ax.text(stats_loc[0], stats_loc[1], stats_str,
+                horizontalalignment='center',
+                verticalalignment='center',
+                transform=ax.transAxes)
 
 
 
@@ -51,8 +64,11 @@ def compare_data_dict_plot(d1, d2, date, lon, lat,
                            trim_cdf=False,
                            subtitle=None,
                            trim_to_quantile=0.005,
+                           diff_trim_quantile=0.01,
                            vmin=None,
                            vmax=None,
+                           dif_vmin=None,
+                           dif_vmax=None,
                            figsize=(10,10)):
 
     if include_diff_cdf | include_diff_hist:
@@ -157,7 +173,12 @@ def compare_data_dict_plot(d1, d2, date, lon, lat,
 
     # dif_abs_max = np.nanmean(np.abs(dif))
     # TODO: set the diff quantile
-    dif_abs_max = np.nanquantile(np.abs(dif), q=0.99)
+    dif_abs_max = np.nanquantile(np.abs(dif), q=(1-diff_trim_quantile))
+
+    if dif_vmin is None:
+        dif_vmin = - dif_abs_max
+    if dif_vmax is None:
+        dif_vmax = dif_abs_max
 
     plt_title_norm_diff = "" if norm_std is None else "\ndiffs normalised"
 
@@ -166,9 +187,9 @@ def compare_data_dict_plot(d1, d2, date, lon, lat,
                     lat=lat,
                     plot_data=dif,
                     fig=fig,
-                    title=f"diff\n{d1_col_name}-{d2_col_name}" + plt_title_norm_diff,
-                    vmin=-dif_abs_max,
-                    vmax=dif_abs_max,
+                    title=f"{dif_type} diff\n{d1_col_name}-{d2_col_name}" + plt_title_norm_diff,
+                    vmin=dif_vmin,
+                    vmax=dif_vmax,
                     cmap='bwr',
                     cbar_label=cbar_label,
                     scatter=scatter)
@@ -178,7 +199,7 @@ def compare_data_dict_plot(d1, d2, date, lon, lat,
         # TODO: add quantile lines to cdf plot
         #  - 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95
         dif_sort = np.sort(dif[~np.isnan(dif)])
-        qs = np.array([0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95])[::-1]
+        qs = np.array([0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99])[::-1]
         qvals = np.quantile(dif_sort, q=qs)
         dif_min = np.min(dif_sort)
 

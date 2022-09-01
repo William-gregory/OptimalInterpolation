@@ -633,7 +633,7 @@ def clean_file_name(s):
 
 
 
-def stats_on_vals(vals, measure=None, name=None):
+def stats_on_vals(vals, measure=None, name=None, qs=None):
     """given a vals (np.array) get a DataFrame of some descriptive stats"""
     out = {}
     out['measure'] = measure
@@ -645,7 +645,9 @@ def stats_on_vals(vals, measure=None, name=None):
     out['max'] = np.nanmax(vals)
     out['std'] = np.nanstd(vals)
 
-    qs = [0.05] + np.arange(0.1, 1.0, 0.1).tolist() + [0.95]
+    if qs is None:
+        qs = [0.05] + np.arange(0.1, 1.0, 0.1).tolist() + [0.95]
+
     quantiles = {f"q{q:.2f}": np.nanquantile(vals, q=q) for q in qs}
     out = {**out, **quantiles}
 
@@ -655,6 +657,8 @@ def stats_on_vals(vals, measure=None, name=None):
 
 
 def compare_data_dict_table(d1, d2, date,
+                            qs=None,
+                            norm_for_diff=None,
                             d1_measure=None,
                             d2_measure=None,
                             d1_col_name=None,
@@ -665,9 +669,22 @@ def compare_data_dict_table(d1, d2, date,
     d1_vals = np.squeeze(d1.vals)
     d2_vals = np.squeeze(d2.vals)
 
-    _ = pd.concat([stats_on_vals(d1_vals, measure=d1_measure, name=d1_col_name),
-                   stats_on_vals(d2_vals, measure=d2_measure, name=d2_col_name),
-                   stats_on_vals(d1_vals - d2_vals, measure=f"{d1_col_name} - {d2_col_name}", name="diff")], axis=1)
+    if norm_for_diff is None:
+        diff = d1_vals - d2_vals
+        diff_name = "abs diff"
+    # really should be checking for DataDict
+    elif isinstance(norm_for_diff, dict):
+        nfd = np.squeeze(norm_for_diff.subset(select_dims={'date': date}).vals)
+        diff = (d1_vals - d2_vals) / nfd
+        diff_name = "abs norm diff"
+    else:
+        print(f"norm_for_diff type: {type(norm_for_diff)} not handled, taking absolute dif")
+        diff = d1_vals - d2_vals
+        diff_name = "abs diff"
+
+    _ = pd.concat([stats_on_vals(d1_vals, measure=d1_measure, name=d1_col_name, qs=qs),
+                   stats_on_vals(d2_vals, measure=d2_measure, name=d2_col_name, qs=qs),
+                   stats_on_vals(diff, measure=f"{d1_col_name} - {d2_col_name}", name=diff_name, qs=qs)], axis=1)
 
     return _
 
