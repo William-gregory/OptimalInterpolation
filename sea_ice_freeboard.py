@@ -1069,7 +1069,14 @@ class SeaIceFreeboard(DataLoader):
             opt_logs = self._svgp_optimise(**kwargs)
 
             hyp_params = self.get_hyperparameters(scale_hyperparams=scale_hyperparams)
+
+            mll_t0 = time.time()
             mll = self.get_marginal_log_likelihood()
+            mll_t1 = time.time()
+
+            if self.verbose > 3:
+                print(f"GPflow_svgp: get_marginal_log_likelihood time: {mll_t1 -mll_t0:.2f} seconds")
+
             out = {
                 "optimise_success": opt_logs['success'],
                 "marginal_loglikelihood": mll,
