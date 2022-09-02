@@ -270,6 +270,7 @@ class SeaIceFreeboard(DataLoader):
                            (self.obs_date.dims['t'] < 0.5) & \
                            (self.obs_date.dims['t'] >= -0.5)
             self.obs_date['held_out'] = self.obs_date.subset(select_array=select_array).copy()
+            self.obs_date['held_out']['held_out_sats'] = np.unique(self.obs_date['held_out'].dims['sat'])
             self.obs_date.fill_value(fill=np.nan, select_array=select_array)
         else:
             select_dims = {"sat": hold_out, "t": t}
@@ -1358,14 +1359,17 @@ class SeaIceFreeboard(DataLoader):
                 # center location only
                 if pred_loc == "center_only":
                     x_pred, y_pred, t_pred, gl0, gl1 = self._predict_loc_center(ngrid_loc, use_raw_data)
-                    pname = np.full(x_pred.shape, pred_loc)
+                    pname = np.full(x_pred.shape, f"{pred_loc}_{self.grid_res}_{ngrid_loc[0]}|{ngrid_loc[1]}")
                 # observations in cell - from held_out data
                 elif pred_loc == "obs_in_cell":
                     # NOTE: if not using held out data this won't work, and if it's the only
                     # pred_loc in prediction_locations then it will crash
                     x_pred, y_pred, t_pred, gl0, gl1 = self._predict_loc_obs_in_cell(ngrid_loc)
-                    pname = np.full(x_pred.shape, pred_loc)
+                    held_out_sats = "|".join(self.obs_date['held_out']['held_out_sats'].tolist())
+                    pname = np.full(x_pred.shape, f"{pred_loc}_{self.grid_res}_{ngrid_loc[0]}|{ngrid_loc[1]}_{held_out_sats}")
                     if np.isnan(x_pred).any():
+                        if self.verbose:
+                            print(f"pred_loc: {pred_loc} had some nans (why?) for grid loc: {ngrid_loc} will not include ANY of these locations")
                         add_to_list = False
 
                 # center of neighbouring cells - will include center
@@ -1378,7 +1382,7 @@ class SeaIceFreeboard(DataLoader):
                     if pred_loc['name'] == "evenly_spaced_in_cell":
                         pred_n = int(pred_loc.get("n", 100))
                         x_pred, y_pred, t_pred, gl0, gl1 = self._predict_loc_evenly_spaced_in_cell(ngrid_loc, n=pred_n)
-                        pname = np.full(x_pred.shape, f"evenly_spaced_in_cell{pred_n}")
+                        pname = np.full(x_pred.shape, f"evenly_spaced_in_cell{pred_n}_{self.grid_res}_{ngrid_loc[0]}|{ngrid_loc[1]}")
                     else:
                         print(f"pred_loc was dict: {pred_loc} BUT 'name': {pred_loc['name']} NOT UNDERSTOOD, SKIPPING!")
                         warnings.warn(f"pred_loc was dict: {pred_loc} BUT 'name': {pred_loc['name']} NOT UNDERSTOOD, SKIPPING!")
@@ -1526,7 +1530,7 @@ class SeaIceFreeboard(DataLoader):
         return x_pred.flatten(), y_pred.flatten(), t_pred.flatten(), gl0.flatten(), gl1.flatten()
 
 
-    def predict_freeboard(self, x=None, y=None, t=None, lon=None, lat=None):
+    def predict_freeboard(self, x=None, y=None, t=None, lon=None, lat=None, full_cov=False):
         """predict freeboard at (x,y,t) or (lon,lat,t) location
         NOTE: t is relative to the window of data available
         """
@@ -1549,9 +1553,9 @@ class SeaIceFreeboard(DataLoader):
         # test point
         xs = np.concatenate([x, y, t], axis=1)
 
-        return self.predict(xs)
+        return self.predict(xs, full_cov=full_cov)
 
-    def predict(self, xs):
+    def predict(self, xs, full_cov=False):
         """generate a prediction for an input (test) point x* (xs"""
         # check inputs - require it to be 2-d array with correct dimension
         # convert if needed
@@ -1569,7 +1573,7 @@ class SeaIceFreeboard(DataLoader):
 
         out = {}
         if self.engine in ["GPflow", "GPflow_svgp"]:
-            out = self._predict_gpflow(xs)
+            out = self._predict_gpflow(xs, full_cov)
             # scale outputs
             # TODO: should this only be applied if
             # out = {k: v * self.scale_outputs ** 2 if re.search("var$", k) else v * self.scale_outputs
@@ -1582,21 +1586,41 @@ class SeaIceFreeboard(DataLoader):
 
         return out
 
-    def _predict_gpflow(self, xs):
+    def _predict_gpflow(self, xs, full_cov=False):
         """given a testing input"""
         # TODO: here add mean
         # TODO: do a shape check here
         # xs_ = xs / self.scale_inputs
-        y_pred = self.model.predict_y(Xnew=xs)
-        f_pred = self.model.predict_f(Xnew=xs)
+        # as of gpflow==2.5.2 predict_y requires full_cov=False, full_output_cov=False, get:
+        # NotImplementedError: The predict_y method currently supports only the argument values full_cov=False and full_output_cov=False
+        y_pred = self.model.predict_y(Xnew=xs, full_cov=False, full_output_cov=False)
+        f_pred = self.model.predict_f(Xnew=xs, full_cov=full_cov)
 
-        # TODO: add mean and scale?
-        out = {
-            "f*": f_pred[0].numpy()[:, 0],
-            "f*_var": f_pred[1].numpy()[:, 0],
-            "y": y_pred[0].numpy()[:, 0],
-            "y_var": y_pred[1].numpy()[:, 0],
-        }
+        if not full_cov:
+            out = {
+                "f*": f_pred[0].numpy()[:, 0],
+                "f*_var": f_pred[1].numpy()[:, 0],
+                "y": y_pred[0].numpy()[:, 0],
+                "y_var": y_pred[1].numpy()[:, 0],
+            }
+        else:
+            f_cov = f_pred[1].numpy()[0,...]
+            f_var = np.diag(f_cov)
+            y_var = y_pred[1].numpy()[:, 0]
+            # y_cov = K(x,x) + sigma^2 I
+            # f_cov = K(x,x), so need to add sigma^2 to diag of f_var
+            y_cov = f_cov.copy()
+            # get the extra variance needed to diagonal - could use self.model.likelihood.variance.numpy() instead(?)
+            diag_var = y_var - f_var
+            y_cov[np.arange(len(y_cov)), np.arange(len(y_cov))] += diag_var
+            out = {
+                "f*": f_pred[0].numpy()[:, 0],
+                "f*_var": f_var,
+                "y": y_pred[0].numpy()[:, 0],
+                "y_var": y_pred[1].numpy()[:, 0],
+                "f*_cov": f_cov,
+                "y_cov": y_cov
+            }
         return out
 
     def _predict_pure_python(self, xs, **kwargs):
@@ -1986,6 +2010,11 @@ class SeaIceFreeboard(DataLoader):
             assert engine == "GPflow_svgp", f"store_loss={store_loss} but engine is: {engine}, " \
                                             f"currently only works for 'GPflow_svgp'"
 
+        # TODO: add a check for if "obs_in_cell" in predict_locations
+        #  - then hold_out can't be None , will cause a break down the line (this isn't idea)
+        # if predict_locations is not None:
+        #     pass
+
         # check calc_on_grid_loc
         if calc_on_grid_loc is not None:
             # NOTE: this is duplicated again in select_gp_locations
@@ -2027,6 +2056,7 @@ class SeaIceFreeboard(DataLoader):
 
         result_file = f"results{file_suffix}.csv"
         prediction_file = f"prediction{file_suffix}.csv"
+        ave_prediction_file = f"ave_prediction{file_suffix}.csv"
         config_file = f"input_config{file_suffix}.json"
         skipped_file = f"skipped{file_suffix}.csv"
         param_file = f"params{file_suffix}"
@@ -2177,6 +2207,7 @@ class SeaIceFreeboard(DataLoader):
 
         all_res = []
         all_preds = []
+        all_ave_preds = []
 
         # for date in dates:
         print(f"date: {date}")
@@ -2191,6 +2222,8 @@ class SeaIceFreeboard(DataLoader):
 
         res_file = os.path.join(date_dir, result_file)
         pred_file = os.path.join(date_dir, prediction_file)
+        ave_pred_file = os.path.join(date_dir, ave_prediction_file)
+
         # bad results will be written to
         skip_file = os.path.join(date_dir, skipped_file)
 
@@ -2220,6 +2253,7 @@ class SeaIceFreeboard(DataLoader):
                             file_names=[config_file,
                                         result_file,
                                         prediction_file,
+                                        ave_prediction_file,
                                         skipped_file] + param_files,
                             suffix=f"_{now}",
                             verbose=True)
@@ -2363,6 +2397,7 @@ class SeaIceFreeboard(DataLoader):
                 print("*" * 75)
                 print(f"{i + 1}/{num_loc}")
 
+            # initial time
             t0 = time.time()
             # ---
             # select location
@@ -2549,33 +2584,15 @@ class SeaIceFreeboard(DataLoader):
                 opt_hyp["optimise_success"] = np.nan
                 opt_runtime = np.nan
 
+            # take time
+            # t1 - t0 will be the run time
             t1 = time.time()
-
-            # ---
-            # get the marginal log likelihood
-            # --
-
-            # mll = self.get_marginal_log_likelihood()
-
-            # ---------------
-            # make predictions
-            # ---------------
-
-            # prediction locations
-            x_pred, y_pred, t_pred, gl0, gl1, plocname = \
-                self.get_neighbours_of_grid_loc(grid_loc,
-                                                predict_locations=predict_locations,
-                                                use_raw_data=use_raw_data,
-                                                predict_in_neighbouring_cells=predict_in_neighbouring_cells)
-
-            preds = self.predict_freeboard(x=x_pred,
-                                           y=y_pred,
-                                           t=t_pred)
 
             # ----
             # store model parameters
             # ----
 
+            # TODO: wrap this section up into a metho
             # TODO: allow for parameter extraction from PurePython, similar to GPflow (low priority)
             if (self.engine != "PurePython") & store_params:
                 with shelve.open(os.path.join(date_dir, param_file), writeback=True) as sdb:
@@ -2609,48 +2626,36 @@ class SeaIceFreeboard(DataLoader):
                     edf.to_csv(los_file, mode="a", header=not os.path.exists(los_file),
                                index=False)
 
-            # ----
-            # store values in DataFrame
-            # ---
+            # ---------------
+            # make predictions
+            # ---------------
 
-            # TODO: storing values in dict/ DAtaFrame should be tidied up
-            t2 = time.time()
-            preds['grid_loc_0'] = grid_loc[0]
-            preds['grid_loc_1'] = grid_loc[1]
-            preds["proj_loc_0"] = gl0
-            preds["proj_loc_1"] = gl1
-            preds["plocname"] = plocname
-            # TODO: this needs to be more robust to handle different mean priors
-            # - using the mean of the single GP just calculated
-            preds['fyi_mean'] = self.mean.vals[grid_loc[0], grid_loc[1]]
-            # TODO: getting mean is quite hard coded -
-            preds['mean'] = self.mean.vals[grid_loc[0], grid_loc[1]] + opt_hyp.get("mean_func_c", 0)
-
-            preds['date'] = date
-
-            # the split the test values per dimension
-            xs = preds.pop('xs')
-            for i in range(xs.shape[1]):
-                preds[f'xs_{self.length_scale_name[i]}'] = xs[:, i]
-
-            preds['run_time'] = t2 - t1
-
+            preds, ave_preds, xs = self._get_predictions_from_locations(date=date,
+                                                                        grid_loc=grid_loc,
+                                                                        predict_locations=predict_locations,
+                                                                        use_raw_data=use_raw_data,
+                                                                        predict_in_neighbouring_cells=predict_in_neighbouring_cells,
+                                                                        opt_hyp=opt_hyp)
             # ----
             # store results (parameters) and predictions
             # ----
 
             ln, lt = EASE2toWGS84_New(x_, y_)
 
+            # TODO: review this section, tidy up
+            #  - read center location from preds using name and grid location, not x,y,t location like below
+
             # store predictions at 'center' location in results
             # center_loc_bool = (preds['proj_loc_0'] == preds['grid_loc_0']) & (
             #             preds['proj_loc_1'] == preds['grid_loc_1'])
+
 
             # get the center of grid prediction
             center_loc_bool = (xs[:, 0] == (x_ * self.scale_inputs[0])) & \
                               (xs[:, 1] == (y_ * self.scale_inputs[1])) & \
                               (xs[:, 2] == (0 * self.scale_inputs[2]))
 
-            # Should always predict on the center... but sometimes don't...
+            # Should always have prediction for the center... but sometimes don't...
             center_pred = {_: preds[_][center_loc_bool]
                             if isinstance(preds[_], np.ndarray) else np.array([preds[_]])
                            for _ in ["f*", "f*_var", "y_var", "mean", "fyi_mean"]}
@@ -2702,16 +2707,23 @@ class SeaIceFreeboard(DataLoader):
 
                 assert False
 
+            preds.pop('f*_cov', None)
+            preds.pop('y_cov', None)
             pdf = pd.DataFrame(preds)
+            adf = pd.DataFrame(ave_preds) if ave_preds is not None else None
 
             # TODO: wrap the below into a method?
             if append_to_file:
 
                 if not checked_output_columns:
 
-                    for df_file in [(rdf, res_file), (pdf, pred_file)]:
-
+                    for df_file in [(rdf, res_file), (pdf, pred_file), (adf, ave_pred_file)]:
+                        if df_file[0] is None:
+                            if self.verbose > 1:
+                                print(f"data for file: \n{df_file[1]} is None, skipping")
+                            continue
                         try:
+
                             # get columns of data on file - if it exists
                             df_cols = df_file[0].columns
                             # read in tops of columns
@@ -2742,18 +2754,25 @@ class SeaIceFreeboard(DataLoader):
                            index=False)
                 pdf.to_csv(pred_file, mode="a", header=not os.path.exists(pred_file),
                            index=False)
+                if adf is not None:
+                    adf.to_csv(ave_pred_file, mode="a", header=not os.path.exists(ave_pred_file),
+                               index=False)
+
 
             all_res.append(rdf)
             all_preds.append(pdf)
+            all_ave_preds.append(adf)
 
         try:
             all_res = pd.concat(all_res)
             all_preds = pd.concat(all_preds)
+            all_ave_preds = pd.concat(all_ave_preds)
         except ValueError:
             if self.verbose > 1:
                 print("no results to concatenate, will return None, None")
             all_res = None
             all_preds = None
+            all_ave_preds = None
         # --
         # total run time
         # --
@@ -2765,6 +2784,110 @@ class SeaIceFreeboard(DataLoader):
             f.write(f"runtime: {t_total1 - t_total0:.2f} seconds")
 
         return all_res, all_preds, output_files
+
+    def _get_predictions_from_locations(self,
+                                        date,
+                                        grid_loc,
+                                        predict_locations,
+                                        use_raw_data,
+                                        predict_in_neighbouring_cells,
+                                        opt_hyp):
+
+        # NOTE: date is only passed into output dictionaries
+
+        t1 = time.time()
+        # prediction locations
+        x_pred, y_pred, t_pred, gl0, gl1, plocname = \
+            self.get_neighbours_of_grid_loc(grid_loc,
+                                            predict_locations=predict_locations,
+                                            use_raw_data=use_raw_data,
+                                            predict_in_neighbouring_cells=predict_in_neighbouring_cells)
+
+        # get a count of the unique plocname s
+        # - if there are multiple then it is assumed these are to be averaged
+        # - and thus require full_cov=True
+
+        uplocname, ploc_count = np.unique(plocname, return_counts=True)
+        get_ave_pred = np.max(ploc_count) > 1
+        preds = self.predict_freeboard(x=x_pred,
+                                       y=y_pred,
+                                       t=t_pred,
+                                       full_cov=get_ave_pred)
+        t2 = time.time()
+        # ----
+        # get average predictions?
+        # ----
+
+        ave_preds = None
+        if get_ave_pred:
+            ave_preds = {
+                'date':date,
+                'grid_loc_0': grid_loc[0],
+                'grid_loc_1': grid_loc[1],
+                "proj_loc_0": [],
+                "proj_loc_1": [],
+                "f*": [],
+                "f_var": [],
+                "y_var": [],
+                "plocname": [],
+                "num_pred": []
+            }
+            # get each prediction group - to average over
+            ave_ploc = uplocname[ploc_count > 1]
+            # increment over each ground - taking average
+            for ap in ave_ploc:
+                # identify the locations in the data for the predictions
+                ap_bool = plocname == ap
+                # create a (1/n) weight vector - to average values
+                # - values not belonging to group get weight of 0, rest get 1/n
+                ap_w = np.zeros(len(plocname))
+                num_pred = ap_bool.sum()
+                ap_w[ap_bool] = 1 / num_pred
+                # average the predictions
+                ave_f = preds['f*'] @ ap_w
+                # get the variance of the average predictions
+                var_f = ap_w @ (preds['f*_cov'] @ ap_w)
+                # get the variance of the average observations
+                var_y = ap_w @ (preds['y_cov'] @ ap_w)
+
+                ave_preds['f*'].append(ave_f)
+                ave_preds['f_var'].append(var_f)
+                ave_preds['y_var'].append(var_y)
+                ave_preds['plocname'].append(ap)
+                # there should only be one unique location
+                ave_preds['proj_loc_0'].append(np.unique(gl0[ap_bool])[0])
+                ave_preds['proj_loc_1'].append(np.unique(gl1[ap_bool])[0])
+                ave_preds['num_pred'].append(num_pred)
+
+        # ----
+        # store values in DataFrame
+        # ---
+
+        # TODO: storing values in dict/ DAtaFrame should be tidied up
+
+        preds['grid_loc_0'] = grid_loc[0]
+        preds['grid_loc_1'] = grid_loc[1]
+        preds["proj_loc_0"] = gl0
+        preds["proj_loc_1"] = gl1
+        preds["plocname"] = plocname
+        # TODO: this needs to be more robust to handle different mean priors
+        # - using the mean of the single GP just calculated
+        preds['fyi_mean'] = self.mean.vals[grid_loc[0], grid_loc[1]]
+        # TODO: getting mean is quite hard coded -
+        preds['mean'] = self.mean.vals[grid_loc[0], grid_loc[1]] + opt_hyp.get("mean_func_c", 0)
+
+        preds['date'] = date
+
+        # the split the test values per dimension
+        xs = preds.pop('xs')
+        for i in range(xs.shape[1]):
+            preds[f'xs_{self.length_scale_name[i]}'] = xs[:, i]
+
+        preds['run_time'] = t2 - t1
+
+        # returning xs out of laziness
+        return preds, ave_preds, xs
+
 
     def get_results_from_dir(self,
                              res_dir,
