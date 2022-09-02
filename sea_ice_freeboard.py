@@ -1383,6 +1383,11 @@ class SeaIceFreeboard(DataLoader):
                         pred_n = int(pred_loc.get("n", 100))
                         x_pred, y_pred, t_pred, gl0, gl1 = self._predict_loc_evenly_spaced_in_cell(ngrid_loc, n=pred_n)
                         pname = np.full(x_pred.shape, f"evenly_spaced_in_cell{pred_n}_{self.grid_res}_{ngrid_loc[0]}|{ngrid_loc[1]}")
+
+
+                        # TODO: allow for subgridding, find sub grid centers, assign them id 1:num sub grid (clockwise)
+                        #  - for each x,y location find the nearest subgrid center, append sub grid id
+
                     else:
                         print(f"pred_loc was dict: {pred_loc} BUT 'name': {pred_loc['name']} NOT UNDERSTOOD, SKIPPING!")
                         warnings.warn(f"pred_loc was dict: {pred_loc} BUT 'name': {pred_loc['name']} NOT UNDERSTOOD, SKIPPING!")
@@ -2246,7 +2251,7 @@ class SeaIceFreeboard(DataLoader):
 
         prior_rdf = pd.DataFrame(columns=["grid_loc_0", "grid_loc_1"])
         if overwrite:
-            if self.vebose:
+            if self.verbose:
                 print(f"overwrite = {overwrite}, moving files to Archive folder")
             param_files = [param_file + _ for _ in ['.bak', '.dir', '.dat', '.pkl', '.db']]
             move_to_archive(top_dir=date_dir,
@@ -2818,6 +2823,8 @@ class SeaIceFreeboard(DataLoader):
         # get average predictions?
         # ----
 
+        xs = preds.pop('xs')
+
         ave_preds = None
         if get_ave_pred:
             ave_preds = {
@@ -2830,7 +2837,8 @@ class SeaIceFreeboard(DataLoader):
                 "f_var": [],
                 "y_var": [],
                 "plocname": [],
-                "num_pred": []
+                "num_pred": [],
+                **{f'xs_{self.length_scale_name[i]}': [] for i in range(xs.shape[1])}
             }
             # get each prediction group - to average over
             ave_ploc = uplocname[ploc_count > 1]
@@ -2859,12 +2867,17 @@ class SeaIceFreeboard(DataLoader):
                 ave_preds['proj_loc_1'].append(np.unique(gl1[ap_bool])[0])
                 ave_preds['num_pred'].append(num_pred)
 
+                # get average coordinate values
+                for i in range(xs.shape[1]):
+                    xsi = xs[:, i]
+                    ave_xsi = (xsi@ap_w) / self.scale_inputs[i]
+                    ave_preds[f'xs_{self.length_scale_name[i]}'].append(ave_xsi)
+
         # ----
         # store values in DataFrame
         # ---
 
         # TODO: storing values in dict/ DAtaFrame should be tidied up
-
         preds['grid_loc_0'] = grid_loc[0]
         preds['grid_loc_1'] = grid_loc[1]
         preds["proj_loc_0"] = gl0
@@ -2879,9 +2892,10 @@ class SeaIceFreeboard(DataLoader):
         preds['date'] = date
 
         # the split the test values per dimension
-        xs = preds.pop('xs')
+        # NOTE: here not scaling values by /self.scale_inputs[i] - should?
+        # - if do so, will this affect processing later?
         for i in range(xs.shape[1]):
-            preds[f'xs_{self.length_scale_name[i]}'] = xs[:, i]
+            preds[f'xs_{self.length_scale_name[i]}'] = xs[:, i]/self.scale_inputs[i]
 
         preds['run_time'] = t2 - t1
 
