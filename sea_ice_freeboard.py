@@ -1387,6 +1387,29 @@ class SeaIceFreeboard(DataLoader):
 
                         # TODO: allow for subgridding, find sub grid centers, assign them id 1:num sub grid (clockwise)
                         #  - for each x,y location find the nearest subgrid center, append sub grid id
+                        # HACK:
+                        # subset predicting into n^2
+                        if 'subset' in pred_loc:
+                            subset = pred_loc['subset']
+                            # get the grid center
+                            # sub grid centers
+                            x_c, y_c, _, _, _ = self._predict_loc_evenly_spaced_in_cell(ngrid_loc,
+                                                                                        n=subset**2)
+                            # subgrid id
+                            sg_id = np.arange(len(x_c)) + 1
+                            # for each prediction - get the closest subgrid center
+                            # - get the cell centers
+                            sub_cell_centers = np.concatenate([x_c[:, None], y_c[:, None]], axis=1)
+                            # - make a KDtree with sub_cell_centers
+                            X_tree = scipy.spatial.cKDTree(sub_cell_centers)
+                            # for each prediction location, find the nearest sub cell center
+                            xy_pred = np.concatenate([x_pred[:, None], y_pred[:, None]], axis=1)
+                            nearest_id = X_tree.query(xy_pred, k=1)[1]
+                            sg_id = sg_id[nearest_id]
+
+                            # dtype will be too small, so can't make strings longer
+                            # - so remake pname
+                            pname = np.array([pn + f'_sg{sg_id[i]}' for i,pn in enumerate(pname)])
 
                     else:
                         print(f"pred_loc was dict: {pred_loc} BUT 'name': {pred_loc['name']} NOT UNDERSTOOD, SKIPPING!")
