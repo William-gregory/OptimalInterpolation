@@ -69,7 +69,9 @@ def compare_data_dict_plot(d1, d2, date, lon, lat,
                            vmax=None,
                            dif_vmin=None,
                            dif_vmax=None,
-                           figsize=(10,10)):
+                           figsize=(10,10),
+                           common_area=False,
+                           **plot_hist_kwargs):
 
     if include_diff_cdf | include_diff_hist:
 
@@ -99,8 +101,8 @@ def compare_data_dict_plot(d1, d2, date, lon, lat,
     d1_ = d1.subset(select_dims={'date': date})
     d2_ = d2.subset(select_dims={'date': date})
 
-    d1_vals = np.squeeze(d1_.vals)
-    d2_vals = np.squeeze(d2_.vals)
+    d1_vals = np.squeeze(d1_.vals).copy()
+    d2_vals = np.squeeze(d2_.vals).copy()
 
     if isinstance(lon, DataDict):
         lon = lon.vals
@@ -120,6 +122,14 @@ def compare_data_dict_plot(d1, d2, date, lon, lat,
     if vmax is None:
         vmax = np.max([np.nanquantile(d1_vals, q=1-trim_to_quantile),
                        np.nanquantile(d2_vals, q=1-trim_to_quantile)])
+
+    # plot only values that exist in both data sets?
+    if common_area:
+        # find where nan in either data set
+        missing_val = np.isnan(d1_vals) | np.isnan(d2_vals)
+        # set those locations to nan
+        d1_vals[missing_val] = np.nan
+        d2_vals[missing_val] = np.nan
 
     plot_pcolormesh(ax=axes[0],
                     lon=lon,
@@ -231,7 +241,7 @@ def compare_data_dict_plot(d1, d2, date, lon, lat,
             dfm = np.mean(dif_sort)
             select_bool = ((dif_sort - dfm) >= - 3 * dif_sort_std) & \
                           ((dif_sort - dfm) <= 3 * dif_sort_std)
-            plot_hist(axes[3], dif_sort[select_bool], ylabel="")
+            plot_hist(axes[3], dif_sort[select_bool], ylabel="", **plot_hist_kwargs)
 
 
     plt.tight_layout()

@@ -731,6 +731,151 @@ def bin_to_50km_grid(cice, grid_res=50):
 
     return cice_new
 
+
+def get_weighted_pred_and_var(date, apr, pr, select="grid_ave", print_every=100,
+                              min_cor=0):
+    assert date in apr
+    assert date in pr
+
+    ap = apr[date]
+    p = pr[date]
+
+    # get certain plocnames
+    # - evenly spaced and NOT a subgrid
+    if select == "grid_ave":
+        use_ploc = [i for i in ap['plocname']
+                    if bool(re.search("^evenly", i)) & (not bool(re.search("^s", i.split("_")[-1])))]
+    elif select == "sub_grid_ave":
+        use_ploc = [i for i in ap['plocname']
+                    if bool(re.search("^evenly", i)) & (bool(re.search("^s", i.split("_")[-1])))]
+    elif select == "obs_in_cell":
+        use_ploc = [i for i in ap['plocname']
+                    if bool(re.search("^obs", i))]
+    else:
+        print(f"select: '{select}' not understood")
+        assert False
+
+    use_ploc = np.unique(use_ploc)
+
+    # map plocname to integer for faster selection
+    ploc_id_map = {pl: i for i, pl in enumerate(p["plocname"].unique())}
+
+    p['plocname_id'] = p['plocname'].map(ploc_id_map)
+
+    wres = []
+    for idx, ploc in enumerate(use_ploc):
+        if idx % print_every == 0:
+            print(f"{idx}/{len(use_ploc)}")
+
+        # get the predictions for each GP location
+        # t0=time.time()
+        ap_ = ap.loc[ap['plocname'] == ploc]
+
+        # number of gps that made prediction for given ploc
+        num_gp = len(ap_)
+
+        w = np.ones(num_gp) / num_gp
+
+        # get the mu and var vector - where f_var has been calculated using the covariance matrix of individual predictions
+        mu, yvar, fvar = ap_['f*'].values, ap_['y_var'].values, ap_['f_var'].values
+
+        means = ap_['mean'].values
+
+        # get the gp names
+        gplocs = ap_['gploc'].values
+
+        # get the individual predictions that made up the averaged values
+        # isin is faster than ==
+        # p_ = p.loc[p['plocname_id'] == ploc_id_map[ploc]]
+        p_ = p.loc[p['plocname_id'].isin([ploc_id_map[ploc]])]
+
+        # get matrix of predictions at locations by gploc
+        # - here don't need to pivot, could just reshape
+
+        # pred_mat = p_[['xs_x', "xs_y", "gploc", "f*"]]#.copy()
+        # pred_mat.set_index(['xs_x', "xs_y", "gploc"])['f*'].unstack()
+        pred_mat = pd.pivot_table(p_,
+                                  index=['xs_x', 'xs_y'],
+                                  columns="gploc",
+                                  values="f*",
+                                  aggfunc=lambda x: x)
+        pred_mat.reset_index(inplace=True)
+
+        # print(f"{time.time() - t0: .2f}")
+
+        # t1 = time.time()
+        # weighted prediction (and weighted prior mean)
+        wf = mu @ w
+        wmean = means @ w
+
+        # if num_gp > 1:
+        # get the correlation matrix
+        # TODO: double check this!
+
+        # if there is only one gp then cor_mat will be a float
+        # - make it into a 2-d array
+        has_nan_in_cor = False
+        if num_gp == 1:
+            cor_mat = np.array([[1.0]])
+        else:
+            # correlation matrix
+            # cor_mat = np.corrcoef(pred_mat[gplocs].values.T)
+            # use pandas methods
+            cor_mat = pred_mat[gplocs].corr().values
+
+            # if all predictions are constant this will lead to nan in cor mat
+            # - due to std = 0
+            if np.isnan(cor_mat).any():
+                has_nan_in_cor = True
+                # print(f"idx: {idx} had nan in correlation")
+                # fill nans with 0 (no correlation), as the correlation of a random variable with a constant is 0
+                # NOTE: setting correlation to 0 will create a diversification affect
+                # - reducing the total variance, so might want to set to 1.0 instead (to be overly conservative)
+                cor_mat[np.isnan(cor_mat)] = 0.0
+                # require diagonal be 1.0s
+                cor_mat[np.arange(len(cor_mat)), np.arange(len(cor_mat))] = 1.0
+
+        cor_mat[(cor_mat < min_cor)] = min_cor
+
+        # TODO: weight the values by 1/num_gp
+        # TODO: double check this!
+        # weighted standard deviation
+        wystd = np.sqrt(yvar) * w
+        wfstd = np.sqrt(fvar) * w
+
+        wyvar = wystd @ (cor_mat @ wystd)
+        wfvar = wfstd @ (cor_mat @ wfstd)
+
+        # store results in a dictionary
+        tmp = {
+            "date": date,
+            "proj_loc_0": ap_['proj_loc_0'].values[0],
+            "proj_loc_1": ap_['proj_loc_1'].values[0],
+            "plocname": ploc,
+            "wf*": wf,
+            "wmean": wmean,
+            "wystd": np.sqrt(wyvar),
+            "wfstd": np.sqrt(wfvar),
+            "xs_x": ap_["xs_x"] @ w,
+            "xs_y": ap_["xs_y"] @ w,
+            "num_gps": num_gp,
+            "nan_in_cor": has_nan_in_cor,
+            "ave_wyvar": np.mean(yvar),
+            "ave_wfvar": np.mean(fvar)
+        }
+
+        tmp = pd.DataFrame(tmp, index=[idx])
+
+        wres.append(tmp)
+
+    wres = pd.concat(wres)
+
+    return wres
+
+
+
+
+
 if __name__ == "__main__":
 
     pass
