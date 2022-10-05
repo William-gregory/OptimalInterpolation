@@ -1,5 +1,6 @@
 data/
 results/
-
+__pycache__
+.idea
 configs/*.json
 
