@@ -183,7 +183,8 @@ class SeaIceFreeboard(DataLoader):
                          sat_list=sat_list,
                          verbose=verbose)
 
-        #
+        # TODO: remove any unused methods
+
         assert isinstance(length_scale_name, (type(None), list, tuple, np.ndarray)), \
             f"length_scale_name needs to be None, list, tuple or ndarray"
         self.length_scale_name = np.arange(1000).tolist() if length_scale_name is None else length_scale_name
@@ -1363,7 +1364,8 @@ class SeaIceFreeboard(DataLoader):
         # {"name": "evenly_spaced_in_grid_cell": "n": 100}
 
         if predict_locations is None:
-            print("predict_locations is None, will default to 'center_only'")
+            if self.verbose >= 4:
+                print("predict_locations is None, will default to 'center_only'")
             predict_locations = 'center_only'
 
         # if prediction_locations is not a list convert it to and increment over
