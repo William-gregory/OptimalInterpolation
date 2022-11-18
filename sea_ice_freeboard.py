@@ -1768,12 +1768,9 @@ class SeaIceFreeboard(DataLoader):
         if date is None:
             date = self.obs_date['date']
 
-        assert self.sie is not None, f"require sie attribute to specified"
-        sie = self.sie.vals  # ['data']
-        sie_dates = self.sie.dims['date']  # ['dims']['date']
-
         # default will be to calculate GPs for all points
-        select_bool = np.ones(sie.shape[:2], dtype=bool)
+        # select_bool = np.ones(sie.shape[:2], dtype=bool)
+        select_bool = np.ones(self.obs.vals.shape[:2], dtype=bool)
 
         # if calc on grid is provide, will aim to only calculate on those locations
         if calc_on_grid_loc is not None:
@@ -1797,30 +1794,35 @@ class SeaIceFreeboard(DataLoader):
                 assert np.all((calc_on_grid_loc[:, i]) < select_bool.shape[i])
 
             # make all select_bool values False
-            select_bool[...] =  False
+            select_bool[...] = False
             # except for the calc_on_grid_loc points
             for i in range(len(calc_on_grid_loc)):
                 gl = calc_on_grid_loc[i,:]
                 select_bool[gl[0], gl[1]] = True
 
-        # TODO: here allow for grid_locations (2-d array) to be used
-        #  - turn all to False except those in grid_locations
+            # TODO: here allow for grid_locations (2-d array) to be used
+            #  - turn all to False except those in grid_locations
+        else:
+            # otherwise just use sie values
+            assert self.sie is not None, f"require sie attribute to specified"
+            sie = self.sie.vals  # ['data']
+            sie_dates = self.sie.dims['date']  # ['dims']['date']
 
-        assert date in sie_dates, f"date: {date} is not in sie['dims']['date']"
-        # dloc = np.where(np.in1d(sie_dates, date))[0][0]
-        dloc = match(date, sie_dates)[0]
+            assert date in sie_dates, f"date: {date} is not in sie['dims']['date']"
+            # dloc = np.where(np.in1d(sie_dates, date))[0][0]
+            dloc = match(date, sie_dates)[0]
 
-        # exclude points where there is now sea ice extent
-        select_bool[np.isnan(sie[..., dloc])] = False
+            # exclude points where there is now sea ice extent
+            select_bool[np.isnan(sie[..., dloc])] = False
 
-        # exclude points where there is insufficient sie
-        select_bool[sie[..., dloc] < min_sie] = False
+            # exclude points where there is insufficient sie
+            select_bool[sie[..., dloc] < min_sie] = False
 
         # coarse grid
         cgrid = self.coarse_grid(coarse_grid_spacing,
                                  grid_space_offset=grid_space_offset,
-                                 x_size=sie.shape[1],
-                                 y_size=sie.shape[0])
+                                 x_size=select_bool.shape[1],
+                                 y_size=select_bool.shape[0])
 
         select_bool = select_bool & cgrid
 
