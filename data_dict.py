@@ -62,8 +62,51 @@ def match(x, y):
 
 
 class DataDict(dict):
+    """DataDict can be used to store numpy arrays along with dimension values.
+
+    DataDict inherits from dict and can be used as one.
+    Main use is to store an numpy array (1d or nd) in vals attribute
+    with 'dims' attribute containing the dimension names.
+    Can add, subtract, multiply and divide DataDicts provided the dimensions (shapes) align.
+    A subset of data can be selected by using the subset method given selection criteria.
+    Can convert a DataDict to a DataFrame or vice versa.
+
+    Attributes
+    ----------
+    vals : np.ndarray
+        numpy array of values of data, can either be 1d or nd
+    dims: dict
+        (ordered) dictionary containing the dimension names
+    name: str
+        'name' of data in DataDict
+    is_flat: bool
+        data is flat (1d) or not (nd)
+
+    """
 
     def __init__(self, vals, dims=None, name=None, is_flat=False, default_dim_name="idx"):
+        """Initialise a Data Dict object
+        
+        Parameters
+        ----------
+        vals : np.ndarray
+            values of the DataDict, can be 1d or nd
+        dims : dictionary or None, default None.
+            keys specify the dimension name and values (np.array) correspond to the index of the dimension.
+            if is_flat is False: number of entries (keys) must align to the length of the shape of vals and
+            the values must align to size of each corresponding dimension
+            if is_flat is True: can have as many entries as desired, with each having corresponding values equal in
+            length to vals. vals must be 1d.
+            if None will be created automatically using default dimension names (default_dim_names) prefix
+        name: str or None, default None.
+            used to populate the 'name' attribute of DataDict
+        is_flat: bool, default False
+            should the data be treated as being 'flat', i.e. vals being a 1d array.
+        default_dim_name: str, default 'idx'
+            if dims not provided one will be created using default_dim_name as a prefix for each dimension
+            and dimension index being np.arange(0,n_dim) where n_dim is the size of a given dimension
+        """
+
         assert isinstance(vals, np.ndarray), f"vals expected to be np.ndarray, got {type(vals)}"
         assert isinstance(dims, (dict, type(None))), f"dims expected to be np.ndarray, got {type(dims)}"
 
@@ -292,12 +335,23 @@ class DataDict(dict):
             return np.ix_(*[locs[k] for k in locs.keys()]), locs
 
     def copy(self, new_name=None):
-        """make a copy of object"""
+        """make a copy of DataDict
+
+        Parameters
+        ----------
+        new_name: str or None, default None.
+            name to be given to return DataDict. If None use existing name
+
+        Returns
+        -------
+        DataDict
+        """
         new_name = new_name if new_name is not None else self.name
         return DataDict(vals=self.vals.copy(), dims=self.dims.copy(), name=new_name, is_flat=self.flat)
 
     @staticmethod
     def dims_equal(dims1, dims2):
+        """check if two dims attributes (dictionaries) are equal by some measures"""
         # return dims1 == dims2
 
         equal_dims = True
@@ -311,7 +365,7 @@ class DataDict(dict):
             equal_dims = False
 
         if not len(dims1) == len(dims2):
-            print(f"dimsensions did not match")
+            print(f"dimensions did not match")
             equal_dims = False
 
         if not set(dims1) == set(dims2):
@@ -335,7 +389,22 @@ class DataDict(dict):
         return equal_dims
 
     def equal(self, other, verbose=False):
-        """compare DataDict object to see if equal"""
+        """
+        compare DataDict object to see if equal
+
+
+        Parameters
+        ----------
+        other: DataDict
+            to compare against
+        verbose: bool, default False
+            print information in comparison process?
+
+        Returns
+        -------
+        bool: True if other equals DataDict, otherwise False
+
+        """
         # TODO: here should check class
         # if not d.name == self.name:
         if not self.flat == other.flat:
@@ -362,9 +431,31 @@ class DataDict(dict):
                select_array=None,
                inplace=False,
                # strict=True,
-               new_name=None,
-               verbose=False):
-        """select a subset of data"""
+               new_name=None):
+        """
+        select a subset of data
+
+        Parameters
+        ----------
+        select_dims: dict or None, default None.
+            If not None expect dict.
+            will use keys and values to select a subset of data.
+            keys must align to keys in dims
+            will select data where dimension index is in values in provided in select_dims
+        select_array: np.array or None, default None
+            if not None expect a np.array with dtype = bool
+            array will be used to select a subset from vals
+        inplace: bool, default False
+            if True will modify attributes in place, otherwise will return a new DataDict
+        new_name: str or None, default None
+            used for name attribute of returned DataDict if inplace = False
+
+        Returns
+        -------
+        if inplace=False a DataDict containing a subset of data
+        otherwise will modify the vals and dims attribute of object to be a subset of attribute.
+
+        """
         # TODO: allow for non strict matching of dimension values
 
         new_name = new_name if new_name is not None else self.name
@@ -425,7 +516,20 @@ class DataDict(dict):
             print(f"neither select_array or select_dims was provided, doing nothing")
 
     def flatten(self, inplace=False):
-        """flatten data, if it's not already"""
+        """
+        flatten data, if it's not already
+
+        Parameters
+        ----------
+        inplace: bool, default False
+            if True will modify attributes inplace
+            otherwise will return a new DataDict
+
+        Returns
+        -------
+        None or DataDict, depending on inplace
+
+        """
         # flatten data if it's not already
         if not self.flat:
             # NOTE: this approach requires creating a bool array equal to the size of vals
@@ -460,7 +564,28 @@ class DataDict(dict):
                 return self.copy()
 
     def unflatten(self, inplace=False, fill_val=np.nan, udims=None, verbose=False):
+        """
+        unflatten a flat DataDict
 
+        Note: resulting DataDict can be very sparse, requiring a lot of memory.
+
+        Parameters
+        ----------
+        inplace: bool, default False
+            change vals and dims inplace?
+        fill_val: int, str, float or None, default np.nan
+            when converting a flat DataDict to one with is_flat=False there maybe missing entries
+            fill_val specifies what these missing entries should be populated with
+        udims: dict or None, default None.
+            'unique' dims to be used for none flat DataDict
+            if None will create a dict from the existing dims
+        verbose: bool, default False
+
+        Returns
+        -------
+        if inplace=False will return a DataDict with is_flat=False
+        otherwise attributes will be modified in place.
+        """
         # TODO: consider better defaults for different dtypes nan, '', 0, etc
 
         if self.flat:
@@ -614,7 +739,18 @@ class DataDict(dict):
             return self.subset(select_array=~pd.isnull(self.vals), inplace=inplace)
 
     def to_dataframe(self):
-        """convert to pandas DataFrame"""
+        """
+        convert to pandas DataFrame
+
+        dims will be used construct the index of DataFrame
+        name will become the column name and
+        vals will be the values in DataFrame
+
+        Returns
+        -------
+        pd.DataFrame
+
+        """
 
         if self.flat:
             midx = pd.MultiIndex.from_arrays([v for v in self.dims.values()],
@@ -629,7 +765,27 @@ class DataDict(dict):
 
     @staticmethod
     def from_dataframe(df, val_col, idx_col=None, name=None):
-        """make DataDict from a DataFrame"""
+        """
+        make DataDict from a DataFrame
+
+        Parameters
+        ----------
+        df: pd.DataFrame
+        val_col: str or list of str
+            column values in df to create DataDict from
+            if list of str then multiple DataDict will be return in a list
+        idx_col: str or list of str, default None
+            which columns of df should be used to create the dims attribute
+            if None will use df.index to create dims attribute
+        name: str or None
+            used only if val_col is str
+            if str then will used to set name attribute
+
+        Returns
+        -------
+        DataDict or list of DataDict
+
+        """
 
         if idx_col is None:
             idx = df.index
@@ -754,7 +910,32 @@ class DataDict(dict):
 
     @staticmethod
     def full(shape=None, dims=None, fill_val=None, name=None, dtype=None, default_dim_name=None):
-        """create an array 'full' of fill_value"""
+        """
+        create an array 'full' of fill_value
+
+        uses np.full to create DataDict
+
+        Parameters
+        ----------
+        shape: list or None, default None
+            if None will determine shape from dims parameter
+            if len(shape) == 1 then returned DataDict will have is_flat=True
+        dims: dict or None
+            used to specify the dims of output
+        fill_val: str, int, float, None, default None
+            value to fill vals with
+        name: str or None
+            name to give output DataDict
+        dtype: str or None
+            if not None will set vals to be dtype determined provided
+        default_dim_name: str or None
+            if dims is None will use be used to specify the dimension names
+
+        Returns
+        -------
+        DataDict with vals all equal to fill_val
+
+        """
 
         if shape is None:
             assert dims is not None, f"either shape or dims must be provided to full"
@@ -769,7 +950,6 @@ class DataDict(dict):
 
 
 if __name__ == "__main__":
-
 
     # --
     # input parameters

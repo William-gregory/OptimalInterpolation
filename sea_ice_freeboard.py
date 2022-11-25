@@ -130,19 +130,61 @@ class PurePythonGPR():
 
 
 class SeaIceFreeboard(DataLoader):
+    """
+    SeaIceFreeboard - gaussian process regression to interpolate sea ice (radar) freebaord
+
+    Attributes
+    ----------
+    parameters
+    mean
+    inputs
+    outputs
+    scale_outputs
+    scale_inputs
+    model
+    X_tree
+    X_tree_data
+    input_data_all
+    valid_gpr_engine = ["GPflow", "PurePython", "GPflow_svgp"]
+    engine
+    input_params = {"date": "", "days_behind": 0, "days_ahead": 0}
+    obs_date
+    num_inducing_points
+    days_ahead
+    days_behind
+    x_center
+    y_center
+
+
+    """
+
     mean_functions = {
         "constant": Constant()
     }
 
     def __init__(self, grid_res="25km", sat_list=None, verbose=True,
                  length_scale_name=None,
-                 rng_seed=42):
+                 rng_seed=None):
+        """
+        Construct a SeaIceFreeboard object
+
+        Parameters
+        ----------
+
+        grid_res: str, default '25km'.
+        sat_list: list or None, default None.
+        verbose: bool, default True
+        length_scale_name: list of str or None, default None
+        rng_seed: int, default 42
+
+        """
 
         super().__init__(grid_res=grid_res,
                          sat_list=sat_list,
                          verbose=verbose)
 
-        #
+        # TODO: remove any unused methods
+
         assert isinstance(length_scale_name, (type(None), list, tuple, np.ndarray)), \
             f"length_scale_name needs to be None, list, tuple or ndarray"
         self.length_scale_name = np.arange(1000).tolist() if length_scale_name is None else length_scale_name
@@ -1322,7 +1364,8 @@ class SeaIceFreeboard(DataLoader):
         # {"name": "evenly_spaced_in_grid_cell": "n": 100}
 
         if predict_locations is None:
-            print("predict_locations is None, will default to 'center_only'")
+            if self.verbose >= 4:
+                print("predict_locations is None, will default to 'center_only'")
             predict_locations = 'center_only'
 
         # if prediction_locations is not a list convert it to and increment over
@@ -1333,7 +1376,7 @@ class SeaIceFreeboard(DataLoader):
         # for pl in predict_locations:
         #     assert pl in []
 
-        # get the neigbouring cells to predict in
+        # get the neighbouring cells to predict in
         _, _, _, ngl0, ngl1 = self._predict_loc_neighbour_center(grid_loc, predict_in_neighbouring_cells)
 
         # store predict
@@ -2005,7 +2048,7 @@ class SeaIceFreeboard(DataLoader):
             optimise=True,
             load_params=False,
             hold_out=None,
-            scale_inputs=False,
+            scale_inputs=True,
             scale_outputs=False,
             append_to_file=True,
             overwrite=True,
@@ -2028,8 +2071,200 @@ class SeaIceFreeboard(DataLoader):
             take_closest=None,
             predict_in_neighbouring_cells=0):
         """
-        wrapper function to run optimal interpolation of sea ice freeboard for a given date
+        run optimal interpolation of sea ice (radar) freeboard for a given date
+
+
+        results are written to the following files in output_dir/tmp_dir
+
+        result_file = f"results{file_suffix}.csv"
+        prediction_file = f"prediction{file_suffix}.csv"
+        ave_prediction_file = f"ave_prediction{file_suffix}.csv"
+        config_file = f"input_config{file_suffix}.json"
+        skipped_file = f"skipped{file_suffix}.csv"
+        param_file = f"params{file_suffix}" (may produce multiple files, generated only if store_params=True)
+        loss_file = f"loss{file_suffix}.csv"
+
+        in results_file reference to output* refer radar freeboard values
+
+        Parameters
+        ----------
+        date: str
+            date to generate interpolation of sea ice, must be in date dims in obs attribute, e.g. "YYYYMMDD"
+        output_dir: str
+            top directory where results will be written to. actual results will be written to sub-directory specified
+            by tmp_dir
+        days_ahead: int, default 4
+            number of days ahead of date to include in training
+        days_behind: int, default 4
+            number of days behind of date to include in training
+        incl_rad: int, float, default 300
+            inclusion radius, expressed in kilometers, locations within this distance for a grid cell center will be
+            included for training
+        grid_res: int, default 25
+            grid resolution, GPR hyper parameters are calculated at the center of grid cells, grid_res specifies the
+            size of each grid cell. i.e. 25 corresponds to a 25x25km grid cell size
+        coarse_grid_spacing: int, default 1
+            the spacing to use when deciding which grid cells should have a hyper parameters calculated for.
+            if 1 then every grid cell is used, if 2 then 1/4 of grid cells are used (evenly spaced apart),
+            if 3 then 1/9 are used, and so on
+        min_inputs: int or None, default 10
+            minimum number of (training) inputs needed in order to optimise hyper parameters, points with fewer than
+            min_inputs are skipped. if None then effectively 0
+        max_inputs: int or None, default None
+            maximum number of (training) inputs allowed to optimise hyper parameters, points with more than
+            max_inputs are skipped. if None then effectively inf
+        min_sie: float, default 0.15
+            minimum sea ice extent (concentration really) required in a grid cell in order to optimise hyper parameters
+            for interpolation using data centered at that grid cell. must be between 0.0 and 1.0
+        engine: str, default "GPflow"
+            type of "engine" to use for GPR calculations, allowed values are
+            "PurePython" - a pure / native python implementation
+            "GPflow" - GPR using GPflow package
+            "GPflow_svgp" - Stochastic Variational GP using GPflow
+        kernel: str, default "Matern32"
+            the covariance kernel to use, any compatiable value with GPflow allowed, PurePython only has "Matern32" implemented
+        season: str, default "2018-2019"
+            which winter season should be used. currently limited to "2018-2019"
+        prior_mean_method: str, default "fyi_average"
+            how prior mean should be calculated. allowed values are
+            "fyi_average" - uses trailing average of first year ice (from fyi attribute), same value used across entire surface
+            "zero" - prior mean is zero
+            "demean_outputs" - calculate prior mean as average of radar freeboard in training data
+        optimise: bool, default True
+            should hyper parameters be optimised? set to False if loading previous parameters
+        load_params: bool, default False
+            load previously calculated (hyper and variational) parameters?
+            if True will read parameters found in 'tmp_dir'
+        hold_out: str, list of str or None, default None.
+            if str must be valid satellite name, or list of them
+            observations from these satellites will be held out of the training data, use for cross validation
+        scale_inputs: bool, list of floats or np.array, default True
+            should the input (location dimension) parameters be scaled?
+            if True will scale (multiply) values by  [1 / (grid_res * 1000), 1 / (grid_res * 1000), 1.0]
+            if list or array values should align with the location dimensions obs attribute (i.e. excluding 'sat')
+            This was found to be needed for optimisation with GPflow to work.
+        scale_outputs: bool, float default False
+            scale (multiply) the radar freebaord measurments? if True value of 100 is used
+        append_to_file: bool, default True
+            append result to output files (csv) once calculated? if False results won't be written to file
+        overwrite: bool, default True
+            if True existing output files will be moved to an Archive folder in tmp_dir
+            use True if want to restart process, set to False if want to continue where previously left off
+        pred_on_hold_out: bool, default True
+            predict on hold_out locations only? applies only when hold_out is not None
+        bound_length_scales: bool, default True
+            restrict range of length scales? if True lower bound is 0 for all and upper bound is (HARDCODED) to be
+            [(2 * incl_rad * 1000), (2 * incl_rad * 1000), (days_behind + days_ahead + 1)]
+        mean_function: str or None, default None.
+            will be passed into GPR method (or similar) from GPflow if using a GPflow engine
+        file_suffix: str, default ""
+            str to be used as a suffix to add to output files (prior to file type).
+        post_process: dict or None, default None
+            provides additional arguments to post_process method
+            if dict can contain key-value pairs: e.g.
+            {
+                "clip_and_smooth": True,
+                "smooth_method": "kernel",
+                "std": 2,
+                "vmax_map": {
+                    "ls_x": 600000,
+                    "ls_y": 600000,
+                    "ls_t": 9,
+                    "kernel_variance": 0.1,
+                    "likelihood_variance": 0.05
+                },
+                "vmin_map": {
+                    "ls_x": 1,
+                    "ls_y": 1,
+                    "ls_t": 1e-6,
+                    "kernel_variance": 2e-6,
+                    "likelihood_variance": 2e-6
+                }
+            }
+            "clip_and_smooth": True will result in post processing to be applied. std is used in kernel smoothing
+            with values being expressed in terms of grid cell spacing. values in vmax/vmin_map should unscaled values
+        print_every: int, default 100
+            print status every print_every grid cells
+        inducing_point_params: dict or None, default None
+            additional parameters to be provided to _build_gpflow_svgp, used only when engine="GPflow_svgp"
+            Example:
+            {
+                "num_inducing_points": 500,
+                "min_obs_for_svgp": 500,
+                "inducing_locations": "random"
+            }
+            where "min_obs_for_svgp" is the min number of points requied to used svgp (will use regular GPR otherwise)
+            "num_inducing_points" is the number of inducing points to use
+            "inducing_locations" can be "random" or "grid" (experimental)
+        optimise_params: dict or None, default None
+            extra parameters to be based to optimise method.
+            Example: can be any parameter in _svgp_optimise method, such as:
+            {
+               "use_minibatch": True,
+               "gamma": 0.5,
+               "learning_rate": 0.05,
+               "trainable_inducing_variable": False,
+               "minibatch_size": 100,
+               "maxiter": 20000,
+               "log_freq": 10,
+               "persistence": 100,
+               "early_stop": True,
+               "save_best": False
+            }
+        skip_if_pred_exists: bool, default False
+            if optimise=False and skip_if_pred_exists=True then will skip results already found in
+            results_file = f"{tmp_dir}/results{file_suffix}.csv"
+        use_raw_data: bool, default False
+            use raw observation data? raw_obs attribute must not be None i.e. raw observations must be loaded
+        tmp_dir: str, default None
+            sub directory in output_dir to put results. will create directory if it does not exist.
+            if None will use make_temp_dir method with a selection of key input parameters to create
+        predict_locations: dict, str, list of dict/str or None, default None.
+            where should the predictions be made? if None will make a prediction for center of grid cell
+            the following examples can be provided individually, or a combination of in a list
+            Examples:
+            "center_only" - make prediction at center of grid cell, if None this is used
+            "obs_in_cell" - make predictions at locations of observations locations in grid cell,
+                            for raw observations only
+            {"name": "evenly_spaced_in_cell", "n": 100} - predict at 100 evenly spaced locations within a grid cell
+            {"name": "evenly_spaced_in_cell", "n": 100, "subset": 2} - 100 predictions evenly spaced, subsetted into
+                                                                     - 2^2=4 sub grid cell
+        previous_results: dict or None, default None
+            if dict used to specify the previously generated results. This can be used for post processing
+            Example:
+            {
+                "dir": <path_to_previous_results/including_tmp_dir>,
+                "suffix": <suffix use for previous results>
+                "date": <get results from previous date? if not supplied use current date>
+            }
+        store_params: bool, default True
+            store parameters on file system using 'shelve' package?
+            This is handy to do for SVGP, particularly if you want to load the (hyper and varaitional) parameters
+            later to make predictions. Parameters being loaded when load_params=True need to be stored first
+        calc_on_grid_loc: 2d array of ints, or list that can be converted to one, or None, default None
+            calculate (optimise) parameters at only specific grid locations?
+            provide an 2-d array containing valid grid locations
+        store_loss: bool, default False
+            store the loss function that occurred over optimisation?
+            only applies when engine = "GPflow_svgp" and when optimisation = True
+            results are written to csv named f"loss{file_suffix}.csv"
+        take_closest: int or None, default None
+            take only the closest 'take_closest' observations? if None value is set to np.inf
+            allows for restricting of training inputs to be some maximum value, and only the closest taken
+        predict_in_neighbouring_cells: int, default 0
+            make prediction on the nearest neigbouring grid cells as well?
+            if 0 only predict on on current grid cell, if 1 predict on all neighbouring grid cells (9 in total)
+
+        Returns
+        -------
+        tuple containing:
+        - DataFrame of "results" that were generated (same form as those in f"results{file_suffix}.csv")
+        - DataFrame of "predictions" that were generated (same form as those in f"prediction{file_suffix}.csv")
+        - dict containing files names for "results",  "predictions", "skipped"
+
         """
+
+        # TODO: min_sie parameter should be reviewed to ensure working as expected
 
         if use_raw_data:
             assert self.raw_obs is not None, f"use_raw_data={use_raw_data}, but attribute: raw_obs={self.raw_obs}"
